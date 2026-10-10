@@ -187,6 +187,29 @@ export const STAR_MOVES_2 = 3; // moves left for 2★
 export const STAR_MOVES_3 = 6; // moves left for 3★
 export const REVIVE_MOVES = 5;
 
+// ---------------------------------------------------------------------------
+// Coins in the match game: a reward for clearing a level, the price of a
+// booster, and the price of a revive. (`.falcon/sdk-config.json` mirrors
+// winCoins / revivePrice for the studio layer.)
+
+/** Coins for the first clear of a level. */
+export const WIN_COINS = 40;
+/** Coins for clearing a level again (keeps replay farming modest). */
+export const REPLAY_COINS = 10;
+/** Coins to keep playing a lost round (+REVIVE_MOVES moves). */
+export const REVIVE_PRICE = 900;
+
+export interface BoosterConfig {
+  key: string;
+  /** Coins for `qty` units. */
+  price: number;
+  qty: number;
+  /** First level (1-based) the booster shows on the board. */
+  unlock: number;
+}
+/** Golden Shovel: dig up any one tile on the board without spending a move. */
+export const BOOSTERS: BoosterConfig[] = [{ key: 'shovel', price: 300, qty: 1, unlock: 2 }];
+
 export function starsFor(movesLeft: number): number {
   if (movesLeft >= STAR_MOVES_3) return 3;
   if (movesLeft >= STAR_MOVES_2) return 2;

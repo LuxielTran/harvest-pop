@@ -1,9 +1,53 @@
-// Original vector art in a bright, rounded farm-cartoon style: items,
-// buildings, crop stages and the five "cropsie" match tiles with faces.
-// Everything is an inline SVG string so the single-file build stays one file.
+// Original vector art in a bright, rounded farm-cartoon style. The farm is drawn
+// in 2.5D: every building, plot and prop is projected with the same 2:1
+// isometric helper (light from the upper left), the way Hay Day-style farms
+// read from a top-down angle. Items, icons and the five "cropsie" match tiles
+// stay flat. Everything is an inline SVG string so the single-file build stays
+// one file.
 
 const svg = (w: number, h: number, body: string, extra = ''): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" ${extra}>${body}</svg>`;
+
+// ---------------------------------------------------------------------------
+// 2.5D helpers. World axes: i runs right/back, j runs left/back, z up; (0,0,0)
+// is the front corner of a footprint. The left (j) face is lit, the right (i)
+// face is shaded, tops are brightest.
+
+type Pt = [number, number];
+type Proj = (i: number, j: number, z?: number) => Pt;
+const isoAt = (ox: number, oy: number): Proj => (i, j, z = 0) => [ox + i - j, oy - (i + j) / 2 - z];
+const n1 = (v: number): number => Math.round(v * 10) / 10;
+const pts = (a: Pt[]): string => a.map(([x, y]) => `${n1(x)},${n1(y)}`).join(' ');
+const pg = (a: Pt[], fill: string, extra = ''): string => `<polygon points="${pts(a)}" fill="${fill}"${extra ? ` ${extra}` : ''}/>`;
+const ln = (a: Pt, b: Pt, stroke: string, w: number, extra = ''): string =>
+  `<line x1="${n1(a[0])}" y1="${n1(a[1])}" x2="${n1(b[0])}" y2="${n1(b[1])}" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round"${extra ? ` ${extra}` : ''}/>`;
+const SHADOW_FILTER = '<filter id="sh" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2.5"/></filter>';
+
+interface FaceColors { l: string; r: string; t: string }
+/** A box standing at (i0, j0, z0) with footprint wi × wj and height h. */
+function isoBox(p: Proj, i0: number, j0: number, z0: number, wi: number, wj: number, h: number, c: FaceColors): string {
+  return pg([p(i0, j0 + wj, z0), p(i0, j0, z0), p(i0, j0, z0 + h), p(i0, j0 + wj, z0 + h)], c.l)
+    + pg([p(i0, j0, z0), p(i0 + wi, j0, z0), p(i0 + wi, j0, z0 + h), p(i0, j0, z0 + h)], c.r)
+    + pg([p(i0, j0 + wj, z0 + h), p(i0, j0, z0 + h), p(i0 + wi, j0, z0 + h), p(i0 + wi, j0 + wj, z0 + h)], c.t);
+}
+/** Soft ground shadow under a footprint. */
+const isoShadow = (p: Proj, wi: number, wj: number, pad = 6): string =>
+  pg([p(-pad, wj + pad), p(-pad, -pad), p(wi + pad, -pad), p(wi + pad, wj + pad)], '#000', 'opacity=".2" filter="url(#sh)"');
+/** Gable roof, ridge along i, overhanging by o. The gable triangle sits on the left face. */
+function isoRoof(p: Proj, wi: number, wj: number, h: number, rh: number, o: number, c: { near: string; far: string; ridge: string; gable: string }): string {
+  const top = h + rh;
+  return pg([p(-o, wj + o, h - 2), p(wi + o, wj + o, h - 2), p(wi + o, wj / 2, top + 1), p(-o, wj / 2, top + 1)], c.far)
+    + pg([p(0, wj, h), p(0, 0, h), p(0, wj / 2, top)], c.gable)
+    + pg([p(-o, -o, h - 2), p(wi + o, -o, h - 2), p(wi + o, wj / 2, top + 1), p(-o, wj / 2, top + 1)], c.near)
+    + ln(p(-o, wj / 2, top + 1), p(wi + o, wj / 2, top + 1), c.ridge, 2.5)
+    + ln(p(-o, -o, h - 2), p(wi + o, -o, h - 2), c.ridge, 1.5, 'opacity=".55"');
+}
+/** A quad on the right (i) face: i∈[a,b], z∈[z1,z2]. */
+const rightQuad = (p: Proj, a: number, b: number, z1: number, z2: number, j = 0): Pt[] => [p(a, j, z1), p(b, j, z1), p(b, j, z2), p(a, j, z2)];
+/** A quad on the left (j) face: j∈[a,b], z∈[z1,z2]. */
+const leftQuad = (p: Proj, a: number, b: number, z1: number, z2: number, i = 0): Pt[] => [p(i, b, z1), p(i, a, z1), p(i, a, z2), p(i, b, z2)];
+const baseTrim = (p: Proj, wi: number, wj: number, color = '#fff'): string =>
+  ln(p(0, wj, 0), p(0, 0, 0), color, 2, 'opacity=".45"') + ln(p(0, 0, 0), p(wi, 0, 0), color, 2, 'opacity=".45"');
 
 // ---------------------------------------------------------------------------
 // Currency & materials
@@ -75,10 +119,26 @@ export const ICON_BREAD = svg(64, 64, `
 <path d="M20 30c4-4 8-4 12 0M34 30c4-4 8-4 12 0" stroke="#fde3b0" stroke-width="3" fill="none" stroke-linecap="round"/>`);
 
 // ---------------------------------------------------------------------------
-// Animals & buildings
+// Booster: the Golden Shovel digs up any one tile without spending a move.
+
+export const ICON_SHOVEL = svg(64, 64, `
+<defs><linearGradient id="gs" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff0a8"/><stop offset=".5" stop-color="#ffd23a"/><stop offset="1" stop-color="#d79a12"/></linearGradient></defs>
+<ellipse cx="34" cy="58" rx="22" ry="4" fill="#000" opacity=".15"/>
+<circle cx="13" cy="13" r="6" fill="none" stroke="#8a5a2b" stroke-width="4.5"/>
+<path d="M17 17L37 37" stroke="#8a5a2b" stroke-width="7" stroke-linecap="round"/>
+<path d="M19 15L37 33" stroke="#c0884a" stroke-width="2" stroke-linecap="round" opacity=".8"/>
+<g transform="translate(45 29) rotate(-45)">
+<rect x="-4" y="-10" width="8" height="12" rx="2" fill="#b57a0a"/>
+<path d="M-12 0H12V14Q12 30 0 38Q-12 30 -12 14Z" fill="url(#gs)" stroke="#b57a0a" stroke-width="2" stroke-linejoin="round"/>
+<path d="M-7 4V16Q-7 24 -2 30" stroke="#fff" stroke-width="2.5" fill="none" stroke-linecap="round" opacity=".7"/>
+</g>
+<path d="M54 9l1.6 4.4L60 15l-4.4 1.6L54 21l-1.6-4.4L48 15l4.4-1.6z" fill="#fff"/>`);
+
+// ---------------------------------------------------------------------------
+// Animals & buildings (2.5D)
 
 export const ICON_CHICKEN = svg(64, 64, `
-<ellipse cx="32" cy="58" rx="14" ry="3" fill="#000" opacity=".12"/>
+<ellipse cx="34" cy="59" rx="16" ry="4" fill="#000" opacity=".16"/>
 <path d="M14 36c0-12 9-20 20-20s18 8 18 20-8 20-18 20-20-8-20-20z" fill="#fff6e8"/>
 <path d="M20 40c0-8 6-14 14-14s12 6 12 14-5 12-12 12-14-4-14-12z" fill="#fff"/>
 <circle cx="40" cy="28" r="12" fill="#fff6e8"/><circle cx="40" cy="27" r="10" fill="#fff"/>
@@ -88,45 +148,204 @@ export const ICON_CHICKEN = svg(64, 64, `
 <path d="M14 34c-6-2-10-1-9 4 0-2 3-3 9-1z" fill="#f2cf98"/>
 <path d="M30 54v6M36 54v6M27 60h6M33 60h6" stroke="#f7a823" stroke-width="2.5" stroke-linecap="round"/>`);
 
-export const ICON_COOP = svg(96, 96, `
-<path d="M8 50L48 14l40 36v34H8z" fill="#c8552c"/><path d="M12 52L48 20l36 32v30H12z" fill="#e76a3a"/>
-<path d="M4 52L48 12l44 40-4 4L48 20 8 56z" fill="#8b3a1c"/>
-<rect x="36" y="56" width="24" height="30" rx="3" fill="#5d2c12"/><rect x="39" y="59" width="18" height="24" rx="2" fill="#2e1608"/>
-<rect x="14" y="60" width="14" height="12" rx="2" fill="#ffe9a8"/><rect x="68" y="60" width="14" height="12" rx="2" fill="#ffe9a8"/>
-<path d="M14 66h14M21 60v12M68 66h14M75 60v12" stroke="#8b3a1c" stroke-width="2"/>
-<rect x="0" y="86" width="96" height="6" rx="2" fill="#9b6b3c"/>`);
+export const ICON_BARN = ((): string => {
+  const p = isoAt(66, 124);
+  const wi = 52, wj = 36, h = 38, rh = 24, o = 4;
+  let s = `<defs>${SHADOW_FILTER}</defs>` + isoShadow(p, wi, wj, 8);
+  s += isoBox(p, 0, 0, 0, wi, wj, h, { l: '#d94a3f', r: '#ab2f28', t: '#e8574b' });
+  s += isoRoof(p, wi, wj, h, rh, o, { far: '#9aa7b7', near: '#5d6b7c', ridge: '#cfd7e1', gable: '#d94a3f' });
+  // Big door on the right face, with the classic white cross braces.
+  s += pg(rightQuad(p, 15, 37, 0, 26), '#5a2616');
+  s += pg(rightQuad(p, 15, 37, 0, 26), 'none', 'stroke="#fff" stroke-width="2.5" stroke-linejoin="round"');
+  s += ln(p(15, 0, 0), p(37, 0, 26), '#fff', 2.5) + ln(p(37, 0, 0), p(15, 0, 26), '#fff', 2.5);
+  // Hayloft window on the gable.
+  s += pg(leftQuad(p, 12, 24, 16, 28), '#fff') + ln(p(0, 18, 16), p(0, 18, 28), '#ab2f28', 1.5) + ln(p(0, 24, 22), p(0, 12, 22), '#ab2f28', 1.5);
+  s += ln(p(0, 0, 0), p(0, 0, h - 1), '#fff', 2, 'opacity=".55"') + baseTrim(p, wi, wj);
+  // A hay bale by the door.
+  s += isoBox(p, 42, -16, 0, 12, 9, 9, { l: '#e6c45a', r: '#c49a35', t: '#f3d775' });
+  s += ln(p(42, -7, 4.5), p(42, -16, 4.5), '#b8912f', 1.5) + ln(p(42, -16, 4.5), p(54, -16, 4.5), '#a9822a', 1.5);
+  return svg(140, 140, s);
+})();
 
-export const ICON_BARN = svg(96, 96, `
-<path d="M10 44L48 12l38 32v44H10z" fill="#a8302a"/><path d="M14 46L48 18l34 28v38H14z" fill="#d6413a"/>
-<path d="M6 46L48 10l42 36-4 5L48 18 10 51z" fill="#6f1f1a"/>
-<path d="M30 54h36v34H30z" fill="#7c2d26"/><path d="M33 57h30v28H33z" fill="#f2f0e4"/>
-<path d="M33 57l30 28M63 57L33 85" stroke="#d6413a" stroke-width="4"/><path d="M48 57v28" stroke="#d6413a" stroke-width="3"/>
-<rect x="40" y="26" width="16" height="16" rx="2" fill="#fff" opacity=".9"/><path d="M40 34h16M48 26v16" stroke="#a8302a" stroke-width="2"/>
-<rect x="0" y="86" width="96" height="6" rx="2" fill="#9b6b3c"/>`);
+export const ICON_SILO = svg(100, 140, `<defs>${SHADOW_FILTER}
+<linearGradient id="sb" x1="0" x2="1"><stop offset="0" stop-color="#f1f4f8"/><stop offset=".45" stop-color="#c9d2dd"/><stop offset="1" stop-color="#7f8a99"/></linearGradient>
+<linearGradient id="sd" x1="0" x2="1"><stop offset="0" stop-color="#c4cdd9"/><stop offset="1" stop-color="#6f7a88"/></linearGradient></defs>
+<ellipse cx="56" cy="124" rx="32" ry="12" fill="#000" opacity=".2" filter="url(#sh)"/>
+<path d="M29,120 A21,10.5 0 0 0 71,120 L71,46 A21,10.5 0 0 1 29,46 Z" fill="url(#sb)"/>
+<g fill="none" stroke="#8d98a6" stroke-width="2" opacity=".7"><path d="M29,64 A21,10.5 0 0 0 71,64"/><path d="M29,82 A21,10.5 0 0 0 71,82"/><path d="M29,100 A21,10.5 0 0 0 71,100"/></g>
+<ellipse cx="50" cy="46" rx="21" ry="10.5" fill="#d4dbe5"/>
+<path d="M29,46 A21,20 0 0 1 71,46 A21,10.5 0 0 1 29,46 Z" fill="url(#sd)"/>
+<path d="M36,38 A14,10 0 0 1 56,30" stroke="#fff" stroke-width="2.5" fill="none" opacity=".5" stroke-linecap="round"/>
+<rect x="47" y="20" width="6" height="8" fill="#5f6a78"/><ellipse cx="50" cy="20" rx="7" ry="3" fill="#7d8896"/>
+<g stroke="#5f6a78" stroke-width="2" stroke-linecap="round"><path d="M62,52v66M68,52v66"/><path d="M62,58h6M62,66h6M62,74h6M62,82h6M62,90h6M62,98h6M62,106h6M62,114h6"/></g>
+<path d="M29,120 A21,10.5 0 0 0 71,120" stroke="#6f7a88" stroke-width="2" fill="none"/>
+<path d="M30,116 L18,124 L18,128 L30,122Z" fill="#8d98a6"/>`);
 
-export const ICON_SILO = svg(96, 96, `
-<path d="M26 30c0-14 44-14 44 0v56H26z" fill="#9aa5b3"/><path d="M30 30c0-10 36-10 36 0v54H30z" fill="#d4dbe5"/>
-<path d="M26 22l22-14 22 14-6 4-16-10-16 10z" fill="#6f7a88"/><path d="M28 20l20-12 20 12v4H28z" fill="#8d98a6"/>
-<path d="M30 44h36M30 58h36M30 72h36" stroke="#9aa5b3" stroke-width="2"/>
-<path d="M40 28c0-4 16-4 16 0" stroke="#fff" stroke-width="2" fill="none" opacity=".5"/>
-<rect x="62" y="30" width="6" height="54" fill="#8d98a6"/><path d="M60 36h10M60 46h10M60 56h10M60 66h10M60 76h10" stroke="#6f7a88" stroke-width="2"/>
-<rect x="0" y="86" width="96" height="6" rx="2" fill="#9b6b3c"/>`);
+export const ICON_MILL = ((): string => {
+  const p = isoAt(58, 108);
+  const wi = 40, wj = 28, h = 30, rh = 14, o = 3;
+  let s = `<defs>${SHADOW_FILTER}</defs>` + isoShadow(p, wi, wj, 7);
+  s += isoBox(p, 0, 0, 0, wi, wj, h, { l: '#d9a060', r: '#a8743c', t: '#e9b874' });
+  for (let z = 7; z < h - 4; z += 7) s += ln(p(0, wj, z), p(0, 0, z), '#8a5a2b', 1, 'opacity=".35"') + ln(p(0, 0, z), p(wi, 0, z), '#5e3a16', 1, 'opacity=".4"');
+  s += isoRoof(p, wi, wj, h, rh, o, { far: '#9c6436', near: '#5e3a16', ridge: '#b9834a', gable: '#d9a060' });
+  s += pg(rightQuad(p, 14, 28, 0, 19), '#4a2a0e') + pg(rightQuad(p, 16, 26, 0, 17), '#6b3f17');
+  const [sx, sy] = p(36, -7, 7);
+  s += `<ellipse cx="${n1(sx)}" cy="${n1(sy)}" rx="7" ry="8" fill="#e8c88a" stroke="#b58d4c" stroke-width="1.5"/><path d="M${n1(sx - 3)} ${n1(sy - 7)}h6" stroke="#b58d4c" stroke-width="2" stroke-linecap="round"/>`;
+  const [hx, hy] = p(0, wj / 2, h + 3);
+  for (const a of [20, 110, 200, 290]) {
+    const r = (a * Math.PI) / 180;
+    s += ln([hx, hy], [hx + Math.cos(r) * 22, hy + Math.sin(r) * 22], '#efe6d2', 5) + ln([hx, hy], [hx + Math.cos(r) * 22, hy + Math.sin(r) * 22], '#c9b99a', 1.5);
+  }
+  s += `<circle cx="${n1(hx)}" cy="${n1(hy)}" r="4.5" fill="#d64a3a" stroke="#fff" stroke-width="1.5"/>`;
+  s += baseTrim(p, wi, wj, '#f3d9a8');
+  return svg(120, 120, s);
+})();
 
-export const ICON_MILL = svg(96, 96, `
-<path d="M28 44h40v42H28z" fill="#8a5a2b"/><path d="M32 46h32v38H32z" fill="#c98b4a"/>
-<path d="M24 46l24-18 24 18z" fill="#6b3f17"/><path d="M28 44l20-14 20 14z" fill="#9f6531"/>
-<rect x="42" y="60" width="12" height="24" rx="2" fill="#4a2a0e"/>
-<g stroke="#e9e2cf" stroke-width="5" stroke-linecap="round"><path d="M48 30L28 12M48 30l20-18M48 30l-20 18M48 30l20 18"/></g>
-<circle cx="48" cy="30" r="5" fill="#d64a3a"/>
-<path d="M32 50h32" stroke="#e7b06a" stroke-width="2"/>
-<rect x="0" y="86" width="96" height="6" rx="2" fill="#9b6b3c"/>`);
+export const ICON_BAKERY = ((): string => {
+  const p = isoAt(58, 108);
+  const wi = 44, wj = 30, h = 32, rh = 12, o = 3;
+  let s = `<defs>${SHADOW_FILTER}</defs>` + isoShadow(p, wi, wj, 7);
+  s += isoBox(p, 0, 0, 0, wi, wj, h, { l: '#f6dcb8', r: '#dcb58b', t: '#fbe7cc' });
+  s += isoRoof(p, wi, wj, h, rh, o, { far: '#e07a52', near: '#b2522f', ridge: '#f0a07c', gable: '#f6dcb8' });
+  // Chimney on the far slope, with a puff of smoke.
+  s += isoBox(p, 30, 20, h + 4, 8, 7, 16, { l: '#c0665a', r: '#8e4538', t: '#5a2a24' });
+  const [cx, cy] = p(34, 23.5, h + 24);
+  s += `<circle cx="${n1(cx + 1)}" cy="${n1(cy - 2)}" r="5" fill="#fff" opacity=".55"/><circle cx="${n1(cx + 6)}" cy="${n1(cy - 9)}" r="6.5" fill="#fff" opacity=".4"/>`;
+  // Shop window with a striped awning on the right face.
+  s += pg(rightQuad(p, 8, 24, 6, 18), '#8fd3ff') + pg(rightQuad(p, 8, 24, 6, 18), 'none', 'stroke="#b57a4a" stroke-width="2" stroke-linejoin="round"');
+  s += ln(p(16, 0, 6), p(16, 0, 18), '#b57a4a', 1.5) + ln(p(8, 0, 12), p(24, 0, 12), '#b57a4a', 1.5);
+  for (let k = 0; k < 5; k++) s += pg([p(6 + 4 * k, 0, 24), p(10 + 4 * k, 0, 24), p(10 + 4 * k, -8, 19), p(6 + 4 * k, -8, 19)], k % 2 ? '#fff' : '#e8413c');
+  s += ln(p(6, -8, 19), p(26, -8, 19), '#b2522f', 1.5);
+  // Door and the bread sign on the left face.
+  s += pg(leftQuad(p, 9, 21, 0, 22), '#7a3e1f');
+  const [dx, dy] = p(0, 15, 15);
+  s += `<circle cx="${n1(dx)}" cy="${n1(dy)}" r="3.5" fill="#ffe9a8"/>`;
+  const [bx, by] = p(0, 24, 27);
+  s += `<circle cx="${n1(bx)}" cy="${n1(by)}" r="6.5" fill="#ffe9a8" stroke="#b57a4a" stroke-width="2"/><ellipse cx="${n1(bx)}" cy="${n1(by)}" rx="4" ry="2.5" fill="#d99b4a"/>`;
+  s += baseTrim(p, wi, wj, '#b57a4a');
+  return svg(120, 120, s);
+})();
 
-export const ICON_BAKERY = svg(96, 96, `
-<path d="M12 40h72v46H12z" fill="#b76a4a"/><path d="M16 44h64v38H16z" fill="#f0c7a0"/>
-<path d="M8 40l40-24 40 24-4 6L48 24 12 46z" fill="#7c3e2a"/>
-<rect x="36" y="56" width="24" height="26" rx="12" fill="#4a2a0e"/><path d="M40 70h16" stroke="#f7a23b" stroke-width="4" stroke-linecap="round"/>
-<rect x="62" y="12" width="10" height="20" fill="#7c3e2a"/>
-<rect x="0" y="86" width="96" height="6" rx="2" fill="#9b6b3c"/>`);
+export const ICON_COOP = ((): string => {
+  const p = isoAt(54, 96);
+  const wi = 32, wj = 24, h = 20, rh = 12, o = 3;
+  let s = `<defs>${SHADOW_FILTER}</defs>` + isoShadow(p, wi, wj, 7);
+  s += isoBox(p, 0, 0, 0, wi, wj, h, { l: '#ef7a46', r: '#c4542a', t: '#f58b5a' });
+  for (let z = 5; z < h - 2; z += 5) s += ln(p(0, wj, z), p(0, 0, z), '#b2522f', 1, 'opacity=".35"') + ln(p(0, 0, z), p(wi, 0, z), '#8b3a1c', 1, 'opacity=".4"');
+  s += isoRoof(p, wi, wj, h, rh, o, { far: '#8b5a3c', near: '#5a3622', ridge: '#a8744f', gable: '#ef7a46' });
+  // Round door on the gable and the ramp down to the ground.
+  s += pg([p(0, 17, 4), p(0, 7, 4), p(-14, 7, 0), p(-14, 17, 0)], '#c98b4a');
+  for (let k = 1; k <= 3; k++) s += ln(p(-3.5 * k, 7, 4 - k), p(-3.5 * k, 17, 4 - k), '#8a5a2b', 1.5);
+  const [hx, hy] = p(0, 12, 10);
+  s += `<circle cx="${n1(hx)}" cy="${n1(hy)}" r="5.5" fill="#3a1a0a" stroke="#ffe9a8" stroke-width="2"/>`;
+  // Nest box on the right face.
+  s += pg(rightQuad(p, 9, 23, 5, 14), '#ffe9a8') + ln(p(16, 0, 5), p(16, 0, 14), '#8b3a1c', 1.5) + ln(p(9, 0, 9.5), p(23, 0, 9.5), '#8b3a1c', 1.5);
+  s += baseTrim(p, wi, wj, '#ffd9b3');
+  return svg(110, 110, s);
+})();
+
+// ---------------------------------------------------------------------------
+// Plots: an isometric soil tile with side faces, and the grass tile of a plot
+// that is still for sale. Crops are planted on the tile in three iso rows.
+
+export const PLOT_SOIL = ((): string => {
+  let furrows = '';
+  let light = '';
+  for (const t of [0.17, 0.33, 0.5, 0.67, 0.83]) {
+    const a: Pt = [46 * t, 23 + 23 * t];
+    const b: Pt = [46 + 46 * t, 23 * t];
+    const a2: Pt = [a[0] + (b[0] - a[0]) * 0.09, a[1] + (b[1] - a[1]) * 0.09];
+    const b2: Pt = [b[0] - (b[0] - a[0]) * 0.09, b[1] - (b[1] - a[1]) * 0.09];
+    furrows += ln(a2, b2, '#6e4520', 5);
+    light += ln([a2[0], a2[1] + 3], [b2[0], b2[1] + 3], '#b07f50', 1.5);
+  }
+  return svg(92, 60, `
+<polygon points="0,23 46,46 46,53 0,30" fill="#5a371a"/><polygon points="46,46 92,23 92,30 46,53" fill="#46290f"/>
+<polygon points="46,0 92,23 46,46 0,23" fill="#956335"/>${furrows}<g opacity=".7">${light}</g>
+<polygon points="46,0 92,23 46,46 0,23" fill="none" stroke="#b98a5c" stroke-width="2"/>`);
+})();
+
+export const PLOT_GRASS = svg(92, 60, `
+<polygon points="0,23 46,46 46,50 0,27" fill="#4f9a3c"/><polygon points="46,46 92,23 92,27 46,50" fill="#3f7f30"/>
+<polygon points="46,0 92,23 46,46 0,23" fill="#8ddc6e"/>
+<polygon points="46,5 82,23 46,41 10,23" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="6 5" opacity=".8"/>
+<g fill="#fff"><circle cx="22" cy="21" r="2"/><circle cx="70" cy="26" r="2"/></g><g fill="#ffd23a"><circle cx="22" cy="21" r=".9"/><circle cx="70" cy="26" r=".9"/></g>`);
+
+function cropArt(kind: 'wheat' | 'corn', stage: 0 | 1 | 2): string {
+  const spots: Pt[] = [];
+  for (const u of [0.22, 0.5, 0.78]) for (const v of [0.22, 0.5, 0.78]) spots.push([46 + 46 * (u - v), 72 - 23 * (u + v)]);
+  spots.sort((a, b) => a[1] - b[1]);
+  const plant = (x: number, y: number): string => {
+    if (stage === 0) return `<path d="M${x},${y} v-7 M${x},${y - 4} l-4,-3 M${x},${y - 4} l4,-3" stroke="${kind === 'wheat' ? '#6fcf5c' : '#4fb84a'}" stroke-width="2" fill="none" stroke-linecap="round"/>`;
+    if (kind === 'wheat') {
+      if (stage === 1) return `<path d="M${x},${y} v-14 M${x - 3},${y} l-2,-11 M${x + 3},${y} l2,-11" stroke="#8dc63f" stroke-width="2.2" fill="none" stroke-linecap="round"/>`;
+      return `<path d="M${x},${y} v-18 M${x - 3},${y} l-3,-13 M${x + 3},${y} l3,-13" stroke="#c9a227" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+<ellipse cx="${x}" cy="${y - 21}" rx="3" ry="6" fill="#f3c54a" stroke="#c9961f"/><ellipse cx="${x - 6}" cy="${y - 15}" rx="2.4" ry="4.5" fill="#f3c54a" stroke="#c9961f" transform="rotate(-20 ${x - 6} ${y - 15})"/><ellipse cx="${x + 6}" cy="${y - 15}" rx="2.4" ry="4.5" fill="#f3c54a" stroke="#c9961f" transform="rotate(20 ${x + 6} ${y - 15})"/>`;
+    }
+    if (stage === 1) return `<path d="M${x},${y} v-16" stroke="#3e9a3c" stroke-width="2.6" stroke-linecap="round"/><path d="M${x},${y - 8} q-6,-1 -9,-7 M${x},${y - 11} q6,-1 9,-7" stroke="#4fb84a" stroke-width="2.4" fill="none" stroke-linecap="round"/>`;
+    return `<path d="M${x},${y} v-26" stroke="#3e9a3c" stroke-width="2.8" stroke-linecap="round"/><path d="M${x},${y - 10} q-7,-1 -10,-8 M${x},${y - 17} q7,-1 10,-8 M${x},${y - 6} q6,0 9,-5" stroke="#4fb84a" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+<ellipse cx="${x + 4}" cy="${y - 14}" rx="3" ry="6" fill="#f7cf3a" stroke="#c9961f" transform="rotate(15 ${x + 4} ${y - 14})"/><path d="M${x + 5},${y - 20} l2,-5" stroke="#4fb84a" stroke-width="2" stroke-linecap="round"/>`;
+  };
+  return svg(92, 72, spots.map(([x, y]) => plant(n1(x), n1(y))).join(''));
+}
+
+export const CROP_STAGE: Record<string, string[]> = {
+  wheat: [cropArt('wheat', 0), cropArt('wheat', 1), cropArt('wheat', 2)],
+  corn: [cropArt('corn', 0), cropArt('corn', 1), cropArt('corn', 2)],
+};
+
+// ---------------------------------------------------------------------------
+// Scene: the lawn tile and the decor layer (farmyard, fence, pond, trees,
+// bushes, hay bales, flowers). The decor sits under every interactive object.
+
+export const LAWN_TILE = svg(64, 32, `<rect width="64" height="32" fill="#7fcf63"/><polygon points="32,0 64,16 32,32 0,16" fill="#78c65c"/>`);
+
+function tree(x: number, y: number, k: number): string {
+  return `<ellipse cx="${x + 5}" cy="${y + 2}" rx="${n1(22 * k)}" ry="${n1(8 * k)}" fill="#000" opacity=".16" filter="url(#sh)"/>
+<rect x="${x - 4}" y="${y - 18}" width="8" height="20" rx="3" fill="#8a5a2b"/>
+<circle cx="${x + 1}" cy="${n1(y - 34 * k)}" r="${n1(24 * k)}" fill="#3f9a3a"/><circle cx="${x - 7}" cy="${n1(y - 38 * k)}" r="${n1(18 * k)}" fill="#52b446"/>
+<circle cx="${x + 6}" cy="${n1(y - 44 * k)}" r="${n1(14 * k)}" fill="#6fd05a"/><circle cx="${x + 2}" cy="${n1(y - 50 * k)}" r="${n1(5 * k)}" fill="#fff" opacity=".3"/>`;
+}
+function bush(x: number, y: number): string {
+  return `<ellipse cx="${x + 3}" cy="${y + 1}" rx="18" ry="6" fill="#000" opacity=".14" filter="url(#sh)"/>
+<circle cx="${x - 8}" cy="${y - 8}" r="10" fill="#4aa842"/><circle cx="${x + 8}" cy="${y - 8}" r="10" fill="#4aa842"/><circle cx="${x}" cy="${y - 13}" r="11" fill="#62c457"/><circle cx="${x - 3}" cy="${y - 17}" r="4" fill="#fff" opacity=".25"/>`;
+}
+function bale(x: number, y: number): string {
+  const p = isoAt(x, y);
+  return isoShadow(p, 22, 14, 4) + isoBox(p, 0, 0, 0, 22, 14, 14, { l: '#e6c45a', r: '#c49a35', t: '#f3d775' })
+    + ln(p(0, 14, 5), p(0, 0, 5), '#b8912f', 1.5) + ln(p(0, 14, 9), p(0, 0, 9), '#b8912f', 1.5)
+    + ln(p(0, 0, 5), p(22, 0, 5), '#a9822a', 1.5) + ln(p(0, 0, 9), p(22, 0, 9), '#a9822a', 1.5);
+}
+function flowers(x: number, y: number): string {
+  const one = (fx: number, fy: number, c: string): string => `<path d="M${fx},${fy + 4} l-4,2 M${fx},${fy + 4} l4,2" stroke="#4aa842" stroke-width="2" stroke-linecap="round"/><circle cx="${fx}" cy="${fy}" r="3.2" fill="${c}"/><circle cx="${fx}" cy="${fy}" r="1.2" fill="#ffd23a"/>`;
+  return one(x, y, '#fff') + one(x + 12, y + 6, '#ff7fa6') + one(x - 9, y + 8, '#ffe16b');
+}
+function fence(a: Pt, b: Pt): string {
+  const n = 9;
+  let s = ln([a[0], a[1] - 9], [b[0], b[1] - 9], '#d9ad6a', 3) + ln([a[0], a[1] - 16], [b[0], b[1] - 16], '#d9ad6a', 3);
+  for (let k = 0; k <= n; k++) {
+    const x = a[0] + ((b[0] - a[0]) / n) * k;
+    const y = a[1] + ((b[1] - a[1]) / n) * k;
+    s += `<rect x="${n1(x - 2.5)}" y="${n1(y - 22)}" width="5" height="22" rx="1.5" fill="#b9834a"/><rect x="${n1(x - 2.5)}" y="${n1(y - 22)}" width="5" height="3" fill="#8a5a2b"/>`;
+  }
+  return s;
+}
+
+export const SCENE_DECOR = ((): string => {
+  let s = `<defs>${SHADOW_FILTER}<filter id="soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="3"/></filter></defs>`;
+  s += '<polygon points="56,206 205,132 352,204 205,266" fill="#d7b074" opacity=".45" filter="url(#soft)"/>';
+  s += fence([-12, 152], [200, 46]) + fence([412, 152], [200, 46]);
+  s += '<ellipse cx="58" cy="472" rx="44" ry="22" fill="#4a8fc4"/><ellipse cx="58" cy="469" rx="38" ry="17" fill="#6cc1ef"/><ellipse cx="48" cy="463" rx="14" ry="5" fill="#fff" opacity=".35"/>';
+  s += '<path d="M92,462 v-16 M97,466 v-12 M88,468 v-10" stroke="#4aa842" stroke-width="2.5" stroke-linecap="round"/>';
+  s += tree(26, 240, 1) + tree(378, 248, 1.05) + tree(34, 614, 1.1) + tree(368, 606, 0.95);
+  s += bush(40, 404) + bush(386, 466) + bush(98, 598) + bush(300, 612);
+  s += bale(338, 568) + bale(366, 584);
+  s += flowers(126, 408) + flowers(242, 424) + flowers(60, 396) + flowers(330, 520) + flowers(296, 150);
+  return svg(400, 632, s);
+})();
+
+// ---------------------------------------------------------------------------
+// UI icons
 
 export const ICON_SHOP = svg(64, 64, `
 <path d="M8 26h48v30a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4z" fill="#d0894a"/>
@@ -161,22 +380,6 @@ export const ICON_SETTINGS = svg(64, 64, `
 
 export const ICON_HOME = svg(64, 64, `
 <path d="M8 32L32 10l24 22-4 4-20-18L12 36z" fill="#fff"/><path d="M14 32l18-16 18 16v22H14z" fill="#fff"/><rect x="27" y="40" width="10" height="14" fill="#3c4a5c"/>`);
-
-// ---------------------------------------------------------------------------
-// Crop stages on a plot (used by the farm scene)
-
-export const CROP_STAGE: Record<string, string[]> = {
-  wheat: [
-    svg(64, 64, `<g stroke="#5fb85c" stroke-width="3" stroke-linecap="round"><path d="M20 56v-10M32 56v-14M44 56v-10"/></g>`),
-    svg(64, 64, `<g stroke="#8dc63f" stroke-width="3.5" stroke-linecap="round"><path d="M16 58V30M26 58V22M36 58V26M46 58V30"/></g><g fill="#c7d85a"><ellipse cx="26" cy="20" rx="3" ry="6"/><ellipse cx="36" cy="24" rx="3" ry="6"/></g>`),
-    svg(64, 64, `<g stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"><path d="M14 60V28M24 60V18M34 60V22M44 60V16M52 60V26"/></g><g fill="#f3c54a" stroke="#c9961f"><ellipse cx="14" cy="22" rx="4" ry="8"/><ellipse cx="24" cy="12" rx="4" ry="8"/><ellipse cx="34" cy="16" rx="4" ry="8"/><ellipse cx="44" cy="10" rx="4" ry="8"/><ellipse cx="52" cy="20" rx="4" ry="8"/></g>`),
-  ],
-  corn: [
-    svg(64, 64, `<g stroke="#5fb85c" stroke-width="3" stroke-linecap="round"><path d="M22 56v-12M42 56v-12"/></g>`),
-    svg(64, 64, `<g stroke="#3e9a3c" stroke-width="4" stroke-linecap="round"><path d="M22 58V24M42 58V20"/><path d="M22 40c-8-2-12-8-12-12M42 36c8-2 12-8 12-12" fill="none"/></g>`),
-    svg(64, 64, `<g stroke="#3e9a3c" stroke-width="4" stroke-linecap="round"><path d="M20 60V14M44 60V10"/><path d="M20 40c-8-2-12-8-12-12M44 36c8-2 12-8 12-12M20 28c-6-2-8-6-8-8M44 24c6-2 8-6 8-8" fill="none"/></g><g fill="#f7cf3a"><ellipse cx="26" cy="34" rx="5" ry="10" transform="rotate(-20 26 34)"/><ellipse cx="38" cy="30" rx="5" ry="10" transform="rotate(20 38 30)"/></g>`),
-  ],
-};
 
 // ---------------------------------------------------------------------------
 // Match tiles: five cropsies with faces (goal tiles pulse in the UI)
@@ -231,7 +434,7 @@ export const TILE_COLORS: Record<string, string> = {
 export const ITEM_ICON: Record<string, string> = {
   wheat: ICON_WHEAT, corn: ICON_CORN, egg: ICON_EGG, feed: ICON_FEED, bread: ICON_BREAD,
   nail: ICON_NAIL, screw: ICON_SCREW, bolt: ICON_BOLT, tape: ICON_TAPE,
-  coin: ICON_COIN, star: ICON_STAR, xp: ICON_XP, chicken: ICON_CHICKEN,
+  coin: ICON_COIN, star: ICON_STAR, xp: ICON_XP, chicken: ICON_CHICKEN, shovel: ICON_SHOVEL,
 };
 
 export const svgUrl = (s: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;

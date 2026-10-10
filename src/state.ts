@@ -4,9 +4,9 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import {
-  ANIMALS, CHICKEN_COST, COOP_CAPACITY, COOP_COST, CROPS, ITEMS, MACHINES, MATERIAL_PRICE, ORDER_BONUS,
-  ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOT_COUNT, RECIPES, STORAGE_START, STORAGE_UPGRADES, TUTORIAL_START,
-  farmLevelForXp, type StorageType, type StorageUpgrade,
+  ANIMALS, BOOSTERS, CHICKEN_COST, COOP_CAPACITY, COOP_COST, CROPS, ITEMS, MACHINES, MATERIAL_PRICE, ORDER_BONUS,
+  ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOT_COUNT, RECIPES, REPLAY_COINS, REVIVE_PRICE, STORAGE_START,
+  STORAGE_UPGRADES, TUTORIAL_START, WIN_COINS, farmLevelForXp, type StorageType, type StorageUpgrade,
 } from './config';
 
 export type PlotStatus = 'locked' | 'empty' | 'growing' | 'ready';
@@ -24,6 +24,8 @@ export interface SaveData {
   storage: Record<StorageType, StorageState>;
   upgradeWallet: Record<string, number>;
   match: { bestStars: Record<string, number> };
+  /** Booster units owned, by booster key. */
+  boosters: Record<string, number>;
   tutorial: { stepId: string; feedGranted: boolean; bonusStars: number };
   farm: {
     plots: PlotState[];
@@ -69,6 +71,7 @@ function freshSave(): SaveData {
     },
     upgradeWallet: {},
     match: { bestStars: {} },
+    boosters: {},
     tutorial: { stepId: 'T00', feedGranted: false, bonusStars: 0 },
     farm: {
       plots: Array.from({ length: PLOT_COUNT }, () => ({ status: 'locked' as PlotStatus, crop: null, readyAt: 0 })),
@@ -115,6 +118,7 @@ export function loadFromSave(raw: Record<string, any>): void {
   }
   f.upgradeWallet = numMap(hp.upgradeWallet);
   f.match.bestStars = numMap(obj(hp.match).bestStars);
+  f.boosters = numMap(hp.boosters);
   const tut = obj(hp.tutorial);
   f.tutorial.stepId = typeof tut.stepId === 'string' ? tut.stepId : 'T00';
   f.tutorial.feedGranted = tut.feedGranted === true;
@@ -173,7 +177,8 @@ function guardClock(): void {
 export function save(): void {
   S.lastSeen = now();
   try {
-    FalconSDK.userData.set({ hp: S, sound: S.settings.sound, music: S.settings.music, haptic: S.settings.haptic });
+    // `coins` mirrors the wallet at the top level, the SDK's convention for the studio header.
+    FalconSDK.userData.set({ hp: S, coins: S.wallet.coin, sound: S.settings.sound, music: S.settings.music, haptic: S.settings.haptic });
   } catch { /* the SDK never throws in practice; the next save resends everything */ }
   notify();
 }
@@ -435,16 +440,58 @@ export function skipOrder(id: number): void {
 // ---------------------------------------------------------------------------
 // Match-3 stars, Upgrade Shop and storage upgrades
 
-/** CompleteMatch: credit only the improvement over the best stars of that level. */
-export function completeMatch(levelId: number, stars: number): number {
+/**
+ * CompleteMatch: credit only the improvement over the best stars of that level,
+ * plus the coin reward (WIN_COINS on a first clear, REPLAY_COINS after that).
+ */
+export function completeMatch(levelId: number, stars: number): { stars: number; coins: number } {
   const key = String(levelId);
   const old = S.match.bestStars[key] ?? 0;
   const delta = Math.max(0, stars - old);
   S.match.bestStars[key] = Math.max(old, stars);
   S.wallet.star += delta;
   if (delta > 0) emit({ type: 'star', delta });
+  const coins = old === 0 ? WIN_COINS : REPLAY_COINS;
+  addCoin(coins);
   save();
-  return delta;
+  return { stars: delta, coins };
+}
+
+// ---------------------------------------------------------------------------
+// Boosters and the paid revive (coins are the game's own wallet)
+
+export const boosterCount = (key: string): number => S.boosters[key] ?? 0;
+
+export function buyBooster(key: string): string {
+  const def = BOOSTERS.find((b) => b.key === key);
+  if (!def) return 'err_state';
+  if (S.wallet.coin < def.price) return 'err_coin';
+  addCoin(-def.price);
+  S.boosters[key] = boosterCount(key) + def.qty;
+  emit({ type: 'action', action: 'buyBooster', target: key });
+  save();
+  return '';
+}
+
+/** Spend one unit; false when none is owned. */
+export function useBooster(key: string): boolean {
+  if (boosterCount(key) <= 0) return false;
+  S.boosters[key] -= 1;
+  if (S.boosters[key] <= 0) delete S.boosters[key];
+  emit({ type: 'action', action: 'useBooster', target: key });
+  save();
+  return true;
+}
+
+export const canPayRevive = (): boolean => S.wallet.coin >= REVIVE_PRICE;
+
+/** Debit the revive price; the caller continues the round. */
+export function payRevive(): string {
+  if (!canPayRevive()) return 'err_coin';
+  addCoin(-REVIVE_PRICE);
+  emit({ type: 'action', action: 'revive' });
+  save();
+  return '';
 }
 
 /** Tutorial fail-safe: a first clear that fell short of 2★ still gets 2 stars. */
