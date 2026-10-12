@@ -1,10 +1,11 @@
-// Farm Home: the scene (barn, silo, machines, coop, chickens, plots), the
-// HUD, the bottom bar and every farm popup (build shop, inventory/storage
-// upgrade, upgrade shop, orders, match map, settings).
+// Farm Home: the 2.5D scene (barn, silo, machines, coop, chickens, plots on an
+// isometric lawn), the HUD, the bottom bar and every farm popup (build shop,
+// inventory/storage upgrade, upgrade shop, orders, match map, settings).
 
+import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
 import {
-  CHICKEN_COST, COOP_CAPACITY, COOP_COST, CROPS, MACHINES, MATCH_LEVELS, MATERIALS, MATERIAL_PRICE, PLOT_COST, RECIPES,
+  BOOSTERS, CHICKEN_COST, COOP_CAPACITY, COOP_COST, CROPS, MACHINES, MATCH_LEVELS, MATERIALS, MATERIAL_PRICE, PLOT_COST, RECIPES,
   XP_THRESHOLDS, xpForNextLevel, type StorageType,
 } from '../config';
 import { t } from '../i18n';
@@ -22,11 +23,15 @@ let scene: HTMLElement | null = null;
 const sigs = new Map<string, string>();
 let timerHandle = 0;
 
+// Scene positions (bottom-centre anchors in scene pixels). Buildings stand on
+// two diagonal rows; the six plots form a 3×2 block on the isometric grid
+// (plot 0, the tutorial's first plot, is the front one).
+const PLOT_GRID = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]];
 const SCENE = {
-  barn: { x: 95, y: 170 }, silo: { x: 305, y: 170 },
-  feedmill: { x: 70, y: 318 }, bakery: { x: 200, y: 318 }, coop: { x: 330, y: 306 },
-  chickens: [{ x: 296, y: 412 }, { x: 366, y: 418 }],
-  plots: [{ x: 95, y: 462 }, { x: 200, y: 462 }, { x: 305, y: 462 }, { x: 95, y: 540 }, { x: 200, y: 540 }, { x: 305, y: 540 }],
+  barn: { x: 108, y: 200 }, silo: { x: 302, y: 190 },
+  feedmill: { x: 72, y: 332 }, bakery: { x: 200, y: 324 }, coop: { x: 330, y: 324 },
+  chickens: [{ x: 286, y: 404 }, { x: 350, y: 416 }],
+  plots: PLOT_GRID.map(([a, b]) => ({ x: 200 + 52 * (a - b), y: 534 - 26 * (a + b) })),
 };
 
 function gate(action: string, target?: string | number): boolean {
@@ -45,12 +50,12 @@ export function buildFarm(): HTMLElement {
   if (root) return root;
   root = el(`<div id="farm" class="screen">
     <div class="hud">
-      <div class="pill coin">${img(A.ICON_COIN)}<span id="hud-coin">0</span></div>
+      <button class="pill coin" id="hud-coinbtn" style="border:0">${img(A.ICON_COIN)}<span id="hud-coin">0</span></button>
       <div class="pill lvl">${img(A.ICON_XP)}<b id="hud-lvl">Lv 1</b><div class="bar"><i id="hud-xp"></i></div></div>
       <div class="pill star">${img(A.ICON_STAR)}<span id="hud-star">0</span></div>
       <button class="iconbtn" id="btn-settings">${img(A.ICON_SETTINGS)}</button>
     </div>
-    <div class="scene"><div class="ground"></div><div class="path"></div><div class="fence"></div></div>
+    <div class="scene"><div class="ground"></div>${img(A.SCENE_DECOR, 'decor')}</div>
     <div class="bottombar">
       <button class="bbtn" data-tut="shop" id="bb-shop">${img(A.ICON_SHOP)}<span>${t('shop')}</span></button>
       <button class="bbtn" data-tut="orders" id="bb-orders">${img(A.ICON_ORDERS)}<span>${t('orders')}</span><b class="badge" id="orders-badge" style="display:none"></b></button>
@@ -59,11 +64,14 @@ export function buildFarm(): HTMLElement {
     </div>
   </div>`);
   scene = root.querySelector<HTMLElement>('.scene')!;
+  scene.querySelector<HTMLElement>('.ground')!.style.backgroundImage = `url("${A.svgUrl(A.LAWN_TILE)}")`;
   root.querySelector('#bb-shop')!.addEventListener('click', () => gate('openShop') && openShop());
   root.querySelector('#bb-orders')!.addEventListener('click', () => gate('openOrders') && openOrders());
   root.querySelector('#bb-match')!.addEventListener('click', () => gate('openMatch') && openMatchMap());
   root.querySelector('#bb-upgrades')!.addEventListener('click', () => gate('openUpgrades') && openUpgradeShop());
   root.querySelector('#btn-settings')!.addEventListener('click', () => gate('openSettings') && openSettings());
+  // The coin pill opens the studio's coin shop when that module is on; otherwise it is just the counter.
+  root.querySelector('#hud-coinbtn')!.addEventListener('click', () => { if (!St.tutorialActive()) FalconSDK.shop.open('header_coin'); });
   buildScene();
   St.onChange(() => { if (root?.classList.contains('on')) { updateFarm(); rerenderPopup(); tutorial.render(); } });
   St.onEvent(onGameEvent);
@@ -93,11 +101,13 @@ export function hideFarm(): void {
 
 function buildScene(): void {
   const s = scene!;
+  // Objects lower on screen are nearer the camera, so they draw on top.
   const add = (html: string, key: string, x: number, y: number, onTap: () => void): HTMLElement => {
     const e = el(html);
     e.dataset.key = key;
     e.style.left = `${x}px`;
     e.style.top = `${y}px`;
+    e.style.zIndex = String(Math.round(y));
     e.addEventListener('click', onTap);
     s.appendChild(e);
     return e;
@@ -141,7 +151,7 @@ export function updateFarm(): void {
     const used = St.used(type);
     const cap = S.storage[type].cap;
     const full = used >= cap;
-    setObj(type, `${used}/${cap}`, `${img(type === 'barn' ? A.ICON_BARN : A.ICON_SILO, 'bld', type === 'barn' ? 112 : 96)}<span class="lbl" style="${full ? 'background:#d63a3a' : ''}">${t(type)} ${used}/${cap}</span>`);
+    setObj(type, `${used}/${cap}`, `${img(type === 'barn' ? A.ICON_BARN : A.ICON_SILO, 'bld', type === 'barn' ? 140 : 130)}<span class="lbl" style="${full ? 'background:#d63a3a' : ''}">${t(type)} ${used}/${cap}</span>`);
   }
   // Machines
   for (const id of ['feedmill', 'bakery']) {
@@ -150,17 +160,17 @@ export function updateFarm(): void {
     const icon = id === 'feedmill' ? A.ICON_MILL : A.ICON_BAKERY;
     if (!m.owned) {
       const can = cfg.unlockLevel <= St.farmLevel();
-      setObj(id, `locked:${can}`, `${img(icon, 'bld', 96)}${img(A.ICON_LOCK, 'lockmark')}<span class="lbl">${can ? `${t(id)} · ${cfg.cost}` : `${t(id)} · ${t('level')} ${cfg.unlockLevel}`}</span>`, 'locked');
+      setObj(id, `locked:${can}`, `${img(icon, 'bld', 120)}${img(A.ICON_LOCK, 'lockmark')}<span class="lbl">${can ? `${t(id)} · ${cfg.cost}` : `${t(id)} · ${t('level')} ${cfg.unlockLevel}`}</span>`, 'locked');
       continue;
     }
     let extra = '';
     if (m.status === 'processing') extra = timerHtml(m.readyAt);
     else if (m.status === 'output' && m.recipe) extra = `<span class="bubble">${img(A.ITEM_ICON[RECIPES[m.recipe].output])}</span>`;
-    setObj(id, `${m.status}:${m.readyAt}`, `${img(icon, 'bld', 96)}${extra}<span class="lbl">${t(id)}</span>`);
+    setObj(id, `${m.status}:${m.readyAt}`, `${img(icon, 'bld', 120)}${extra}<span class="lbl">${t(id)}</span>`);
   }
   // Coop & chickens
-  if (!S.farm.coopBuilt) setObj('coop', 'locked', `${img(A.ICON_COOP, 'bld', 104)}${img(A.ICON_LOCK, 'lockmark')}<span class="lbl">${t('coop')}</span>`, 'locked');
-  else setObj('coop', `built:${S.farm.chickens.length}`, `${img(A.ICON_COOP, 'bld', 104)}<span class="lbl">${t('coop_short')} ${S.farm.chickens.length}/${COOP_CAPACITY}</span>`);
+  if (!S.farm.coopBuilt) setObj('coop', 'locked', `${img(A.ICON_COOP, 'bld', 110)}${img(A.ICON_LOCK, 'lockmark')}<span class="lbl">${t('coop')}</span>`, 'locked');
+  else setObj('coop', `built:${S.farm.chickens.length}`, `${img(A.ICON_COOP, 'bld', 110)}<span class="lbl">${t('coop_short')} ${S.farm.chickens.length}/${COOP_CAPACITY}</span>`);
   SCENE.chickens.forEach((_, i) => {
     const c = S.farm.chickens[i];
     const e = scene!.querySelector<HTMLElement>(`[data-key="chicken${i}"]`)!;
@@ -170,19 +180,20 @@ export function updateFarm(): void {
     if (c.status === 'hungry') extra = `<span class="bubble warn">${img(A.ICON_FEED)}</span>`;
     else if (c.status === 'producing') extra = timerHtml(c.readyAt);
     else extra = `<span class="bubble">${img(A.ICON_EGG)}</span>`;
-    setObj(`chicken${i}`, `${c.status}:${c.readyAt}`, `${img(A.ICON_CHICKEN, 'bld', 48)}${extra}`);
+    setObj(`chicken${i}`, `${c.status}:${c.readyAt}`, `${img(A.ICON_CHICKEN, 'bld', 50)}${extra}`);
   });
-  // Plots
+  // Plots: an iso soil tile (or the grass tile of a plot for sale) with the crop standing on it.
+  const soil = img(A.PLOT_SOIL, 'soil');
   S.farm.plots.forEach((p, i) => {
-    if (p.status === 'locked') { setObj(`plot${i}`, 'locked', `<span class="price">${img(A.ICON_COIN)}${PLOT_COST}</span>`, 'locked'); return; }
-    if (p.status === 'empty') { setObj(`plot${i}`, 'empty', `<span class="bubble">${img(A.ICON_PLUS)}</span>`); return; }
+    if (p.status === 'locked') { setObj(`plot${i}`, 'locked', `${img(A.PLOT_GRASS, 'soil')}<span class="price">${img(A.ICON_COIN)}${PLOT_COST}</span>`, 'locked'); return; }
+    if (p.status === 'empty') { setObj(`plot${i}`, 'empty', `${soil}<span class="bubble">${img(A.ICON_PLUS)}</span>`); return; }
     const crop = CROPS[p.crop!];
     const stages = A.CROP_STAGE[crop.id];
-    if (p.status === 'ready') { setObj(`plot${i}`, `ready:${crop.id}`, `${img(stages[2], 'crop')}<span class="bubble">${img(A.ITEM_ICON[crop.id])}</span>`, 'ready'); return; }
+    if (p.status === 'ready') { setObj(`plot${i}`, `ready:${crop.id}`, `${soil}${img(stages[2], 'crop')}<span class="bubble">${img(A.ITEM_ICON[crop.id])}</span>`, 'ready'); return; }
     const left = p.readyAt - St.now();
     const grow = (St.tutorialActive() ? crop.tutorialSeconds : crop.growSeconds) * 1000;
     const stage = left > grow * 0.5 ? 0 : 1;
-    setObj(`plot${i}`, `growing:${crop.id}:${stage}:${p.readyAt}`, `${img(stages[stage], 'crop')}${timerHtml(p.readyAt)}`, 'growing');
+    setObj(`plot${i}`, `growing:${crop.id}:${stage}:${p.readyAt}`, `${soil}${img(stages[stage], 'crop')}${timerHtml(p.readyAt)}`, 'growing');
   });
 }
 
@@ -265,9 +276,6 @@ function onGameEvent(e: St.GameEvent): void {
 // ---------------------------------------------------------------------------
 // Popups
 
-const itemRow = (item: string, label: string, qty: string, extra = '', dim = false): string =>
-  `<div class="row${dim ? ' dim' : ''}">${img(A.ITEM_ICON[item], 'ic')}<div class="info"><b>${label}</b>${extra}</div><span class="qty">${qty}</span></div>`;
-
 function openPlantMenu(i: number): void {
   const p = openPopup('plant', t('choose_crop'));
   const render = (): void => {
@@ -311,6 +319,17 @@ export function openShop(): void {
       const ok = m.unlockLevel <= lvl;
       addRow(m.id === 'bakery' ? A.ICON_BAKERY : A.ICON_MILL, t(m.id), ok ? m.recipes.map((r) => t(RECIPES[r].output)).join(', ') : t('unlock_at', { n: m.unlockLevel }), m.cost, m.id, ok,
         () => { if (gate('buyMachine', m.id) && report(St.buyMachine(m.id))) closePopup(); });
+    }
+    // Boosters for the match game, bought with the same coins (hidden during the tutorial).
+    if (!St.tutorialActive()) {
+      p.body.appendChild(el(`<div class="section">${t('boosters')}</div>`));
+      for (const b of BOOSTERS) {
+        addRow(A.ITEM_ICON[b.key], t(`booster_${b.key}`), `${t(`booster_${b.key}_desc`)} ${t('booster_owned', { n: St.boosterCount(b.key) })}`, b.price, `booster_${b.key}`, true, () => {
+          const err = St.buyBooster(b.key);
+          if (err === 'err_coin') { if (!FalconSDK.shop.open(`buy_booster_${b.key}`)) toast(t('err_coin'), 'warn'); return; }
+          if (report(err)) toast(t('booster_bought', { name: t(`booster_${b.key}`) }));
+        });
+      }
     }
   };
   render();

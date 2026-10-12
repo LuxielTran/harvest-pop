@@ -5,16 +5,23 @@
 // emits `levelStart`; `win` / `lose` close the turn. The one exception is the
 // automatic boot call made by `registerFalconGame`, which lands on the farm
 // (the GDD tutorial starts there) unless `?level=N` asks for a board.
+//
+// Coins have three uses: a reward for clearing a level, buying the Golden
+// Shovel booster, and paying for a revive on a lost round. All three go
+// through the game's own wallet in `state.ts`; a shortage opens the SDK shop
+// when the studio layer turned it on, and toasts otherwise.
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import { createFalconEvents, type FalconGame } from './falcon-game';
-import { MATCH_LEVELS } from './config';
-import { initLang } from './i18n';
+import { BOOSTERS, MATCH_LEVELS } from './config';
+import { initLang, t } from './i18n';
 import * as St from './state';
 import { tutorial } from './tutorial';
 import { closePopup, stage, toast } from './ui/common';
 import { buildFarm, hideFarm, levelUnlocked, setFarmHandlers, showFarm } from './ui/farm';
-import { closeMatch, isMatchOpen, matchProgress, openMatch, pauseMatch, reviveMatch, showResult } from './ui/match';
+import {
+  armBooster, cancelBooster, closeMatch, isBoosterArmed, isMatchOpen, matchProgress, openMatch, pauseMatch, reviveMatch, showResult,
+} from './ui/match';
 import './style.css';
 
 const events = createFalconEvents();
@@ -47,6 +54,19 @@ function goFarm(): void {
   showFarm();
 }
 
+/** The paid revive: debit the wallet, then continue the lost board. */
+function paidRevive(): boolean {
+  if (lostLevel < 0 || !isMatchOpen()) return false;
+  const err = St.payRevive();
+  if (err) {
+    if (!FalconSDK.shop.open('revive')) toast(t('err_coin'), 'warn');
+    return false;
+  }
+  const ok = reviveMatch();
+  if (ok) lostLevel = -1;
+  return ok;
+}
+
 /** Enter match level `index` (0-based) straight away. */
 function startLevel(index: number): void {
   boot();
@@ -66,16 +86,16 @@ function startLevel(index: number): void {
   openMatch(level, {
     onWin: (i, stars) => {
       const id = MATCH_LEVELS[i].id;
-      const delta = St.completeMatch(id, stars);
+      const reward = St.completeMatch(id, stars);
       tutorial.onMatchWon();
       events.emit('win');
       const next = i + 1 < MATCH_LEVELS.length && !St.tutorialActive() ? () => startLevel(i + 1) : undefined;
-      showResult({ won: true, stars, delta: delta + (St.tutorialActive() ? 0 : 0), onFarm: goFarm, onNext: next });
+      showResult({ won: true, stars, delta: reward.stars, coins: reward.coins, onFarm: goFarm, onNext: next });
     },
     onLose: (i) => {
       lostLevel = i;
       events.emit('lose', { canRevive: true });
-      showResult({ won: false, stars: 0, delta: 0, onFarm: goFarm, onRetry: () => startLevel(i) });
+      showResult({ won: false, stars: 0, delta: 0, coins: 0, onFarm: goFarm, onRetry: () => startLevel(i), onRevive: paidRevive });
     },
     onQuit: () => {
       if (FalconSDK.analytics.turn.isActive()) FalconSDK.analytics.turn.end('Skip', { levelProgress: matchProgress() });
@@ -95,6 +115,7 @@ export const game: FalconGame = {
   pause: () => { paused = true; pauseMatch(true); },
   resume: () => { paused = false; pauseMatch(false); },
   getProgress: () => matchProgress(),
+  // The studio-paid revive (the in-game one debits the wallet itself in `paidRevive`).
   revive: () => {
     if (lostLevel < 0) return false;
     const ok = reviveMatch();
@@ -104,6 +125,15 @@ export const game: FalconGame = {
   audio: {
     set: (key, on) => St.setSetting(key, on),
     get: (key) => St.S.settings[key] === 1,
+  },
+  // The game owns what the Golden Shovel DOES. A unit armed through this
+  // contract belongs to the studio layer's wallet, so digging does not spend
+  // one of the game's own units.
+  boosters: {
+    defs: BOOSTERS.map((b) => ({ key: b.key, title: t(`booster_${b.key}`), desc: t(`booster_${b.key}_desc`), price: b.price, qty: b.qty, unlock: b.unlock })),
+    activate: (key) => armBooster(key, true),
+    isArmed: (key) => isBoosterArmed(key),
+    cancel: () => cancelBooster(),
   },
 };
 
