@@ -104,7 +104,7 @@ function startLevel(index: number): void {
   }, { tutorial: inTutorial });
   if (inTutorial) tutorial.onMatchEnter();
   // Fire when the board is READY to play — the studio layer starts the level's clock here.
-  events.emit('levelStart', { index: level, difficulty: 'normal', levelId: String(MATCH_LEVELS[level].id) });
+  events.emit('levelStart', { index: level, difficulty: MATCH_LEVELS[level].difficulty, levelId: String(MATCH_LEVELS[level].id) });
 }
 
 /** What the studio layer attaches to. See falcon-game.ts for every member. */
@@ -126,9 +126,9 @@ export const game: FalconGame = {
     set: (key, on) => St.setSetting(key, on),
     get: (key) => St.S.settings[key] === 1,
   },
-  // The game owns what the Golden Shovel DOES. A unit armed through this
-  // contract belongs to the studio layer's wallet, so digging does not spend
-  // one of the game's own units.
+  // The game owns what each booster DOES (Golden Shovel, Lucky Horseshoe, Witch
+  // Fruit). A unit used through this contract belongs to the studio layer's
+  // wallet, so it does not spend one of the game's own units.
   boosters: {
     defs: BOOSTERS.map((b) => ({ key: b.key, title: t(`booster_${b.key}`), desc: t(`booster_${b.key}_desc`), price: b.price, qty: b.qty, unlock: b.unlock })),
     activate: (key) => armBooster(key, true),

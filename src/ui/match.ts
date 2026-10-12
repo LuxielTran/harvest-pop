@@ -1,13 +1,17 @@
-// Match Board screen: a 2.5D wooden tray drawn on the canvas with swap / clear /
-// fall animations, the moves & goal HUD, hints, reshuffle, the Golden Shovel
-// booster (dig up any one tile without spending a move) and the result card
-// with its coin reward and the paid revive.
+// Match Board screen: a 2.5D wooden tray drawn on the canvas. Boards of any
+// shape up to 9×9 with Mud, Wooden Crates, Soil and farm animals; Tractor
+// Cropsies and Rainbow Seeds with their blasts; the moves / goals / stars HUD;
+// hints and reshuffle; the booster bar (Golden Shovel, Lucky Horseshoe, Witch
+// Fruit); and the result card with its coin reward and the paid revive.
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
-import { BOARD_SIZE, BOOSTERS, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, starsFor, type BoosterConfig, type MatchLevelConfig, type TileKind } from '../config';
+import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, starsFor, type BoosterConfig, type MatchLevelConfig } from '../config';
 import { t } from '../i18n';
-import { Board, type Move, type Pos, type Tile } from '../match3';
+import {
+  Board, goalFor, goalsDone, goalsProgress, makeGoals,
+  type Fall, type GoalProgress, type Hit, type Move, type Pos, type StepCtx, type StepResult, type Tile,
+} from '../match3';
 import * as St from '../state';
 import { closePopup, el, getScale, img, openPopup, stage, toStage, toast } from './common';
 
@@ -17,24 +21,28 @@ export interface MatchCallbacks {
   onQuit(levelIndex: number): void;
 }
 
-const CELL = 47;
-const BX = 12;
-const BY = 166;
+/** Board area on the 400×800 stage. */
+const AREA = { x: 12, y: 168, w: 376, h: 376 };
 const PAD = 3;
-const W = CELL * BOARD_SIZE;
 /** Height of the tray's front face: the board reads as a wooden crate seen from slightly above. */
 const TRAY_DEPTH = 16;
 
 interface View { tile: Tile; x: number; y: number; s: number; a: number; }
 interface Tween { obj: View; prop: 'x' | 'y' | 's' | 'a'; from: number; to: number; t: number; dur: number; ease: (x: number) => number; resolve?: () => void; }
-interface Flyer { kind: TileKind; x: number; y: number; tx: number; ty: number; t: number; }
-/** The shovel swing played over a dug tile. */
-interface Fx { x: number; y: number; t: number; }
+interface Mover { view: View; pts: { x: number; y: number }[]; t: number; dur: number; resolve: () => void; }
+interface Flyer { key: string; x: number; y: number; tx: number; ty: number; t: number; }
+interface Fx { kind: 'shovel' | 'witch' | 'row' | 'col' | 'cross' | 'rainbow' | 'puff' | 'sparkle'; x: number; y: number; t: number; dur: number; targets?: { x: number; y: number }[]; }
 
 const easeOut = (x: number): number => 1 - (1 - x) * (1 - x);
 const easeInOut = (x: number): number => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
 const easeBounce = (x: number): number => (x < 0.85 ? easeOut(x / 0.85) : 1 - Math.sin(((x - 0.85) / 0.15) * Math.PI) * 0.06);
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+const SPRITES: Record<string, string> = {
+  ...A.TILE_ART, rainbow: A.RAINBOW_SEED, chick: A.CHICK_TILE, piglet: A.PIGLET_TILE,
+  stripe_row: A.STRIPE_ROW, stripe_col: A.STRIPE_COL, mud: A.MUD_TILE, crate2: A.CRATE_TILE, crate1: A.CRATE_CRACKED,
+  soil: A.SOIL_TILE, soilicon: A.ICON_SOIL, tractor: A.ICON_TRACTOR, shovel: A.ICON_SHOVEL, witch: A.ICON_WITCH, basket: A.ICON_BASKET,
+};
 
 let root: HTMLElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -44,13 +52,14 @@ const sprites = new Map<string, HTMLImageElement>();
 let cfg: MatchLevelConfig = MATCH_LEVELS[0];
 let levelIndex = 0;
 let board: Board | null = null;
+let goals: GoalProgress[] = [];
 let views = new Map<number, View>();
 let tweens: Tween[] = [];
+let movers: Mover[] = [];
 let flyers: Flyer[] = [];
 let fxs: Fx[] = [];
 let fading: View[] = [];
 let moves = 0;
-let collected = 0;
 let locked = false;
 let paused = false;
 let over = false;
@@ -65,12 +74,14 @@ let cb: MatchCallbacks | null = null;
 let clock = 0;
 let shakeT = 0;
 let hudSig = '';
+let introText = '';
+let CELL = 47, BX = 12, BY = 168, W = 376, H = 376;
 /** The booster waiting for a tile pick. `external` = armed through the FalconGame contract (the studio layer's unit). */
 let armed: { key: string; external: boolean } | null = null;
 
-function sprite(kind: string): HTMLImageElement {
-  let s = sprites.get(kind);
-  if (!s) { s = new Image(); s.src = A.svgUrl(A.TILE_ART[kind] ?? A.ITEM_ICON[kind]); sprites.set(kind, s); }
+function sprite(key: string): HTMLImageElement {
+  let s = sprites.get(key);
+  if (!s) { s = new Image(); s.src = A.svgUrl(SPRITES[key]); sprites.set(key, s); }
   return s;
 }
 
@@ -82,8 +93,8 @@ function build(): void {
     <div class="mhud">
       <div class="top"><button class="iconbtn" id="m-home">${img(A.ICON_HOME)}</button><span class="lvl" id="m-lvl"></span>
         <div class="pill">${img(A.ICON_CLOCK)}<span id="m-moves">0</span></div></div>
-      <div class="goalbox"><div class="gbox" id="m-goal"><img alt=""><div><small>${t('goal')}</small><span id="m-goalv"></span></div></div>
-        <div class="gbox"><div class="starrow" id="m-stars" style="transform:scale(.55);margin:-12px -14px"></div></div></div>
+      <div class="goalbox"><div class="goals" id="m-goals"></div>
+        <div class="gbox stars"><div class="starrow" id="m-stars"></div></div></div>
     </div>
     <div class="mfoot">
       <div class="btip" id="m-btip" style="display:none"></div>
@@ -101,8 +112,7 @@ function build(): void {
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('pointercancel', () => { drag = null; });
   window.addEventListener('resize', fitCanvas);
-  for (const k of Object.keys(A.TILE_ART)) sprite(k);
-  sprite('shovel');
+  for (const k of Object.keys(SPRITES)) sprite(k);
   stage().appendChild(root);
 }
 
@@ -116,6 +126,15 @@ function fitCanvas(): void {
   ctx.setTransform(k, 0, 0, k, 0, 0);
 }
 
+/** Fit the board's grid into the board area, centred. */
+function layout(): void {
+  CELL = Math.floor(Math.min(47, AREA.w / board!.cols, AREA.h / board!.rows));
+  W = CELL * board!.cols;
+  H = CELL * board!.rows;
+  BX = Math.round(AREA.x + (AREA.w - W) / 2);
+  BY = Math.round(AREA.y + (AREA.h - H) / 2);
+}
+
 export function openMatch(index: number, callbacks: MatchCallbacks, opts: { tutorial?: boolean } = {}): void {
   build();
   closePopup();
@@ -123,13 +142,15 @@ export function openMatch(index: number, callbacks: MatchCallbacks, opts: { tuto
   levelIndex = Math.max(0, Math.min(MATCH_LEVELS.length - 1, index));
   cfg = MATCH_LEVELS[levelIndex];
   board = new Board(cfg, opts.tutorial ? 0 : Math.floor(Math.random() * 1e6));
+  goals = makeGoals(cfg);
+  layout();
   views = new Map();
   tweens = [];
+  movers = [];
   flyers = [];
   fxs = [];
   fading = [];
   moves = cfg.moves;
-  collected = 0;
   locked = false;
   paused = false;
   over = false;
@@ -139,14 +160,21 @@ export function openMatch(index: number, callbacks: MatchCallbacks, opts: { tuto
   armed = null;
   hintDelay = opts.tutorial ? 1500 : 4000;
   idleSince = performance.now();
-  for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) {
-    const tile = board.grid[r][c]!;
-    views.set(tile.id, { tile, x: cx(c), y: cy(r) - 500 - r * 20, s: 1, a: 1 });
-    tweenTo(views.get(tile.id)!, 'y', cy(r), 420 + r * 40, easeBounce);
+  for (let r = 0; r < board.rows; r++) for (let c = 0; c < board.cols; c++) {
+    const tile = board.grid[r][c];
+    if (!tile) continue;
+    const v: View = { tile, x: cx(c), y: cy(r) - 500 - r * 20, s: 1, a: 1 };
+    views.set(tile.id, v);
+    void tweenTo(v, 'y', cy(r), 420 + r * 40, easeBounce);
   }
   root!.classList.add('on');
-  root!.querySelector('#m-lvl')!.textContent = `${t('lvl')} ${cfg.id}`;
-  (root!.querySelector('#m-goal img') as HTMLImageElement).src = A.svgUrl(A.TILE_ART[cfg.goal.tile]);
+  const lvl = root!.querySelector<HTMLElement>('#m-lvl')!;
+  const hard = cfg.difficulty === 'hard' || cfg.difficulty === 'superhard' || cfg.difficulty === 'boss';
+  lvl.innerHTML = `${t('lvl')} ${cfg.id}${hard ? ` <em class="diff ${cfg.difficulty}">${t(`diff_${cfg.difficulty}`)}</em>` : ''}`;
+  buildGoalChips();
+  introText = !tutorialMode && cfg.intro ? t(cfg.intro) : '';
+  const fresh = !tutorialMode ? BOOSTERS.find((b) => b.unlock === cfg.id) : undefined;
+  if (fresh) toast(t('booster_new', { name: t(`booster_${fresh.key}`) }));
   hudSig = '';
   updateHud();
   renderBoosterBar();
@@ -166,7 +194,7 @@ export function closeMatch(): void {
 
 export function isMatchOpen(): boolean { return !!root?.classList.contains('on'); }
 export function pauseMatch(on: boolean): void { paused = on; }
-export function matchProgress(): number { return board ? Math.min(100, Math.round((collected / cfg.goal.qty) * 100)) : 0; }
+export function matchProgress(): number { return board ? Math.round(goalsProgress(goals) * 100) : 0; }
 
 /** Continue a lost board with a few more moves (the caller has already paid, if paying was needed). */
 export function reviveMatch(): boolean {
@@ -178,6 +206,7 @@ export function reviveMatch(): boolean {
   toast(t('revive_moves', { n: REVIVE_MOVES }));
   updateHud();
   ensureMoves();
+  renderBoosterBar();
   idleSince = performance.now();
   return true;
 }
@@ -192,10 +221,11 @@ function quit(): void {
 const cx = (c: number): number => BX + c * CELL + CELL / 2;
 const cy = (r: number): number => BY + r * CELL + CELL / 2;
 
+/** The grid cell under a stage point (any cell of the bounding grid, holes included). */
 function cellAt(x: number, y: number): Pos | null {
   const c = Math.floor((x - BX) / CELL);
   const r = Math.floor((y - BY) / CELL);
-  return c >= 0 && c < BOARD_SIZE && r >= 0 && r < BOARD_SIZE ? { r, c } : null;
+  return board && board.inBounds(r, c) ? { r, c } : null;
 }
 
 function tweenTo(obj: View, prop: 'x' | 'y' | 's' | 'a', to: number, dur: number, ease = easeOut): Promise<void> {
@@ -205,26 +235,49 @@ function tweenTo(obj: View, prop: 'x' | 'y' | 's' | 'a', to: number, dur: number
   });
 }
 
-function goalTarget(): { x: number; y: number } {
-  const goalBox = root!.querySelector('#m-goal')!.getBoundingClientRect();
-  return toStage(goalBox.left + 26, goalBox.top + goalBox.height / 2);
+/** Move a view along a path of cell centres (falls, diagonal slides). */
+function moveAlong(view: View, pts: { x: number; y: number }[], dur: number): Promise<void> {
+  return new Promise((resolve) => {
+    movers = movers.filter((m) => m.view !== view);
+    movers.push({ view, pts, t: 0, dur, resolve });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// HUD
+
+function buildGoalChips(): void {
+  const box = root!.querySelector<HTMLElement>('#m-goals')!;
+  box.innerHTML = goals.map((g) => `<div class="gchip" data-g="${g.key}">${img(A.goalIcon(g.def, cfg.animal))}<b></b></div>`).join('');
+}
+
+function chipCenter(key: string): { x: number; y: number } {
+  const e = root!.querySelector(`.gchip[data-g="${key}"] img`) ?? root!.querySelector('#m-goals')!;
+  const r = e.getBoundingClientRect();
+  return toStage(r.left + r.width / 2, r.top + r.height / 2);
 }
 
 function updateHud(): void {
   if (!root) return;
-  const stars = over ? 0 : collected >= cfg.goal.qty ? starsFor(moves) : starsFor(moves - 1);
-  const sig = `${moves}:${collected}:${stars}`;
+  const done = goalsDone(goals);
+  const stars = over ? 0 : done ? starsFor(moves) : starsFor(moves - 1);
+  const sig = `${moves}:${goals.map((g) => g.got).join(',')}:${stars}`;
   if (sig === hudSig) return;
   hudSig = sig;
   root.querySelector('#m-moves')!.textContent = String(moves);
-  root.querySelector('#m-goalv')!.textContent = `${Math.min(collected, cfg.goal.qty)}/${cfg.goal.qty}`;
-  root.querySelector('#m-goal')!.classList.toggle('done', collected >= cfg.goal.qty);
-  const sr = root.querySelector('#m-stars')!;
-  sr.innerHTML = [1, 2, 3].map((s) => img(A.ICON_STAR, stars >= s ? 'on' : '')).join('');
+  root.querySelector('.mhud .pill')!.classList.toggle('low', moves <= 5);
+  for (const g of goals) {
+    const chip = root.querySelector<HTMLElement>(`.gchip[data-g="${g.key}"]`);
+    if (!chip) continue;
+    const ok = g.got >= g.need;
+    chip.classList.toggle('done', ok);
+    chip.querySelector('b')!.textContent = ok ? '✓' : String(g.need - g.got);
+  }
+  root.querySelector('#m-stars')!.innerHTML = [1, 2, 3].map((s) => img(A.ICON_STAR, stars >= s ? 'on' : '')).join('');
 }
 
 // ---------------------------------------------------------------------------
-// Boosters: the bar under the board, arming, buying and digging
+// Boosters: the bar under the board, arming, buying and using them
 
 function renderBoosterBar(): void {
   if (!root) return;
@@ -242,8 +295,10 @@ function renderBoosterBar(): void {
       row.appendChild(plate);
     }
   }
-  tip.style.display = armed ? '' : 'none';
-  if (armed) tip.textContent = t('booster_tip');
+  const text = armed ? t(`booster_tip_${armed.key}`) : introText;
+  tip.style.display = text ? '' : 'none';
+  tip.classList.toggle('intro', !armed);
+  tip.textContent = text;
 }
 
 function setArmed(a: { key: string; external: boolean } | null): void {
@@ -252,16 +307,29 @@ function setArmed(a: { key: string; external: boolean } | null): void {
   renderBoosterBar();
 }
 
-/** Arm `key` so the next tap on a tile digs it. `external` units belong to the studio layer. */
+/** Arm a target booster so the next tap on the board uses it. `external` units belong to the studio layer. */
 export function armBooster(key: string, external = false): boolean {
-  if (!board || over || locked || paused) return false;
-  if (!BOOSTERS.some((b) => b.key === key)) return false;
+  const def = BOOSTERS.find((b) => b.key === key);
+  if (!board || over || locked || paused || !def) return false;
+  if (def.use === 'instant') return addMovesBooster(external);
   if (!external && St.boosterCount(key) <= 0) return false;
   setArmed({ key, external });
   return true;
 }
 export function isBoosterArmed(key: string): boolean { return armed?.key === key; }
 export function cancelBooster(): void { if (armed) setArmed(null); }
+
+/** Lucky Horseshoe: +5 moves, right away. */
+export function addMovesBooster(external = false): boolean {
+  if (!board || over || locked || paused) return false;
+  if (!external && !St.useBooster('moves')) return false;
+  moves += EXTRA_MOVES;
+  if (FalconSDK.analytics.turn.isActive()) FalconSDK.analytics.turn.useBooster('moves');
+  toast(t('moves_added', { n: EXTRA_MOVES }));
+  updateHud();
+  renderBoosterBar();
+  return true;
+}
 
 function tapPlate(b: BoosterConfig): void {
   if (locked || over || paused) return;
@@ -288,35 +356,34 @@ function openBoosterBuy(b: BoosterConfig): void {
   p.foot.appendChild(buy);
 }
 
-/** The Golden Shovel: remove one tile for free, then let the board settle and cascade. */
-async function dig(pos: Pos): Promise<void> {
-  if (!board || !armed || locked || over) return;
-  const tile = board.grid[pos.r][pos.c];
-  if (!tile) return;
+/** Use the armed target booster on `pos`: the Golden Shovel digs one cell, the Witch Fruit clears 3×3. */
+async function useArmedAt(pos: Pos): Promise<void> {
+  const b = board;
   const a = armed;
+  if (!b || !a || locked || over) return;
+  if (a.key === 'shovel') {
+    const tile = b.grid[pos.r][pos.c];
+    if (!b.mask[pos.r][pos.c] || (!b.block[pos.r][pos.c] && (!tile || tile.animal))) return;
+  }
   if (!a.external && !St.useBooster(a.key)) { setArmed(null); return; }
   setArmed(null);
   locked = true;
+  hint = null;
+  introText = '';
   if (FalconSDK.analytics.turn.isActive()) FalconSDK.analytics.turn.useBooster(a.key);
-  const v = views.get(tile.id)!;
-  fxs.push({ x: v.x, y: v.y, t: 0 });
-  await wait(230);
-  if (!board) return;
-  shakeT = 0.12;
-  board.grid[pos.r][pos.c] = null;
-  views.delete(tile.id);
-  if (tile.kind === cfg.goal.tile) {
-    collected++;
-    const tg = goalTarget();
-    flyers.push({ kind: tile.kind, x: v.x, y: v.y, tx: tg.x, ty: tg.y, t: 0 });
+  const hits: Hit[] = [];
+  if (a.key === 'shovel') {
+    fxs.push({ kind: 'shovel', x: cx(pos.c), y: cy(pos.r), t: 0, dur: 500 });
+    await wait(230);
+    hits.push({ pos, power: 'all' });
   } else {
-    fading.push(v);
-    await tweenTo(v, 's', 0, 180);
-    fading = [];
+    fxs.push({ kind: 'witch', x: cx(pos.c), y: cy(pos.r), t: 0, dur: 750 });
+    await wait(330);
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) hits.push({ pos: { r: pos.r + dr, c: pos.c + dc } });
   }
-  updateHud();
-  await dropTiles();
-  await resolve();
+  if (board !== b) return;
+  shakeT = 0.15;
+  await runResolve({ hits });
   afterTurn();
 }
 
@@ -330,7 +397,8 @@ function onDown(e: PointerEvent): void {
   const p = toStage(e.clientX, e.clientY);
   const pos = cellAt(p.x, p.y);
   if (!pos) return;
-  if (armed) { void dig(pos); return; }
+  if (armed) { void useArmedAt(pos); return; }
+  if (!board.at(pos.r, pos.c)) return;
   drag = { pos, x: p.x, y: p.y };
   idleSince = performance.now();
   hint = null;
@@ -345,7 +413,6 @@ function onMove(e: PointerEvent): void {
   const from = drag.pos;
   const to: Pos = Math.abs(dx) > Math.abs(dy) ? { r: from.r, c: from.c + Math.sign(dx) } : { r: from.r + Math.sign(dy), c: from.c };
   drag = null;
-  if (to.r < 0 || to.c < 0 || to.r >= BOARD_SIZE || to.c >= BOARD_SIZE) return;
   selected = null;
   void trySwap(from, to);
 }
@@ -364,12 +431,13 @@ function onUp(): void {
 }
 
 async function trySwap(a: Pos, b: Pos): Promise<void> {
-  if (!board) return;
+  const bd = board;
+  if (!bd || !bd.canSwap(a, b)) return;
   locked = true;
   hint = null;
-  const va = views.get(board.grid[a.r][a.c]!.id)!;
-  const vb = views.get(board.grid[b.r][b.c]!.id)!;
-  const ok = board.wouldMatch(a, b);
+  const va = views.get(bd.grid[a.r][a.c]!.id)!;
+  const vb = views.get(bd.grid[b.r][b.c]!.id)!;
+  const ok = bd.validSwap(a, b);
   await Promise.all([tweenTo(va, 'x', cx(b.c), 150, easeInOut), tweenTo(va, 'y', cy(b.r), 150, easeInOut), tweenTo(vb, 'x', cx(a.c), 150, easeInOut), tweenTo(vb, 'y', cy(a.r), 150, easeInOut)]);
   if (!ok) {
     shakeT = 0.25;
@@ -378,70 +446,124 @@ async function trySwap(a: Pos, b: Pos): Promise<void> {
     idleSince = performance.now();
     return;
   }
-  board.swap(a, b);
+  if (board !== bd) return;
+  const turn = bd.beginSwap(a, b);
   moves--;
+  if (introText) { introText = ''; renderBoosterBar(); }
   updateHud();
-  await resolve();
+  await runResolve(turn);
   afterTurn();
 }
 
-/** After a swap or a dig has settled: win, lose, or hand the board back. */
+/** After a swap or a booster has settled: win, lose, or hand the board back. */
 function afterTurn(): void {
   if (over || !board) return;
-  if (collected >= cfg.goal.qty) { finish(true); return; }
+  if (goalsDone(goals)) { finish(true); return; }
   if (moves <= 0) { finish(false); return; }
   ensureMoves();
   locked = false;
   idleSince = performance.now();
 }
 
-/** Clear → fall → spawn, repeated while cascades keep matching. */
-async function resolve(): Promise<void> {
-  if (!board) return;
-  for (let cascade = 0; cascade < 40; cascade++) {
-    const cleared = board.clearMatches();
-    if (!cleared.length) break;
-    const target = goalTarget();
-    const anims: Promise<void>[] = [];
-    for (const { kind, id } of cleared) {
-      const v = views.get(id);
-      if (!v) continue;
-      views.delete(v.tile.id);
-      if (kind === cfg.goal.tile) { collected++; flyers.push({ kind, x: v.x, y: v.y, tx: target.x, ty: target.y, t: 0 }); }
-      else { anims.push(tweenTo(v, 's', 0, 180)); fading.push(v); }
-    }
-    await Promise.all(anims);
-    fading = [];
-    updateHud();
-    await dropTiles();
+// ---------------------------------------------------------------------------
+// Resolving a turn: clear steps, animals out, gravity — animated
+
+async function runResolve(turn: StepCtx): Promise<void> {
+  const b = board;
+  if (!b) return;
+  for (let i = 0; i < 80; i++) {
+    const res = b.step(turn);
+    turn = {};
+    const out = b.collectAnimals();
+    if (!res && !out.length) break;
+    if (res) await animateStep(res);
+    if (board !== b) return;
+    if (out.length) await animateAnimals(out);
+    if (board !== b) return;
+    await animateFalls(b.applyGravity());
+    if (board !== b) return;
   }
 }
 
-/** Drop tiles into the holes and spawn new ones from above. */
-async function dropTiles(): Promise<void> {
-  if (!board) return;
-  const g = board.applyGravity();
-  const falls: Promise<void>[] = [];
-  for (const f of g.falls) {
-    const v = views.get(f.tile.id)!;
-    falls.push(tweenTo(v, 'y', cy(f.toR), 90 + (f.toR - f.fromR) * 55, easeBounce));
+function fly(key: string, from: { x: number; y: number }, goal: GoalProgress): void {
+  const to = chipCenter(goal.key);
+  flyers.push({ key, x: from.x, y: from.y, tx: to.x, ty: to.y, t: 0 });
+}
+
+async function animateStep(res: StepResult): Promise<void> {
+  for (const bl of res.blasts) {
+    const at = { x: cx(bl.pos.c), y: cy(bl.pos.r) };
+    if (bl.type === 'rainbow') fxs.push({ kind: 'rainbow', ...at, t: 0, dur: 520, targets: (bl.targets ?? []).map((p) => ({ x: cx(p.c), y: cy(p.r) })) });
+    else fxs.push({ kind: bl.type, ...at, t: 0, dur: 480 });
   }
-  for (const f of g.spawned) {
-    const v: View = { tile: f.tile, x: cx(f.c), y: cy(f.fromR), s: 1, a: 1 };
-    views.set(f.tile.id, v);
-    falls.push(tweenTo(v, 'y', cy(f.toR), 90 + (f.toR - f.fromR) * 55, easeBounce));
+  if (res.blasts.length) { shakeT = Math.max(shakeT, 0.12); await wait(140); }
+  for (const cr of res.created) {
+    views.delete(cr.from.id);
+    const v: View = { tile: cr.tile, x: cx(cr.pos.c), y: cy(cr.pos.r), s: 0.4, a: 1 };
+    views.set(cr.tile.id, v);
+    void tweenTo(v, 's', 1, 260, easeBounce);
+    fxs.push({ kind: 'sparkle', x: v.x, y: v.y, t: 0, dur: 450 });
   }
-  await Promise.all(falls);
+  const shrink: Promise<void>[] = [];
+  for (const { tile, pos } of res.cleared) {
+    const v = views.get(tile.id);
+    if (!v) continue;
+    views.delete(tile.id);
+    const g = goalFor(goals, { tile });
+    if (g) { g.got++; fly(tile.kind, { x: v.x, y: v.y }, g); }
+    else { fading.push(v); shrink.push(tweenTo(v, 's', 0, 180)); }
+    if (!g && tile.special) fxs.push({ kind: 'sparkle', x: cx(pos.c), y: cy(pos.r), t: 0, dur: 350 });
+  }
+  for (const bk of res.blockers) {
+    const at = { x: cx(bk.pos.c), y: cy(bk.pos.r) };
+    fxs.push({ kind: 'puff', ...at, t: 0, dur: 380 });
+    if (bk.hp > 0) continue;
+    const g = goalFor(goals, { blocker: bk.type });
+    if (g) { g.got++; fly(bk.type === 'mud' ? 'mud' : 'crate2', at, g); }
+  }
+  for (const p of res.plowed) {
+    const at = { x: cx(p.c), y: cy(p.r) };
+    fxs.push({ kind: 'sparkle', ...at, t: 0, dur: 400 });
+    const g = goalFor(goals, { soil: true });
+    if (g) { g.got++; fly('soilicon', at, g); }
+  }
+  updateHud();
+  await Promise.all(shrink);
+  fading = [];
+}
+
+async function animateAnimals(out: { pos: Pos; tile: Tile }[]): Promise<void> {
+  for (const { tile } of out) {
+    const v = views.get(tile.id);
+    views.delete(tile.id);
+    const g = goalFor(goals, { animal: true });
+    if (g) g.got++;
+    if (v && g) fly(tile.kind, { x: v.x, y: v.y }, g);
+  }
+  updateHud();
+  await wait(260);
+}
+
+async function animateFalls(falls: Fall[]): Promise<void> {
+  const all: Promise<void>[] = [];
+  for (const f of falls) {
+    let v = views.get(f.tile.id);
+    const start = f.path[0];
+    if (!v) { v = { tile: f.tile, x: cx(start.c), y: cy(start.r), s: 1, a: 1 }; views.set(f.tile.id, v); }
+    const pts = f.path.map((p) => ({ x: cx(p.c), y: cy(p.r) }));
+    all.push(moveAlong(v, pts, 90 + (f.path.length - 1) * 55));
+  }
+  await Promise.all(all);
 }
 
 function ensureMoves(): void {
-  if (!board) return;
-  if (board.legalMoves().length > 0) return;
+  if (!board || board.legalMoves().length > 0) return;
   board.reshuffle();
   toast('🔀');
   views = new Map();
-  for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) {
-    const tile = board.grid[r][c]!;
+  for (let r = 0; r < board.rows; r++) for (let c = 0; c < board.cols; c++) {
+    const tile = board.grid[r][c];
+    if (!tile) continue;
     const v: View = { tile, x: cx(c), y: cy(r), s: 0, a: 1 };
     views.set(tile.id, v);
     void tweenTo(v, 's', 1, 300);
@@ -450,7 +572,7 @@ function ensureMoves(): void {
 
 function showHint(): void {
   if (!board) return;
-  hint = board.bestHint(cfg.goal.tile);
+  hint = board.bestMove(goals);
   idleSince = performance.now();
 }
 
@@ -466,13 +588,13 @@ function finish(won: boolean): void {
     if (!cb) return;
     if (won) cb.onWin(i, starsFor(moves), moves);
     else cb.onLose(i);
-  }, 350);
+  }, 450);
 }
 
 /**
- * The result card. A win shows the stars and the coin reward; a loss offers the
- * paid revive (`onRevive` returns true when the round continues). `onNext` is
- * omitted when there is no next level or during the tutorial.
+ * The result card. A win shows the stars and the coin reward; a loss shows what
+ * was left and offers the paid revive (`onRevive` returns true when the round
+ * continues). `onNext` is omitted when there is no next level or during the tutorial.
  */
 export function showResult(o: {
   won: boolean; stars: number; delta: number; coins: number;
@@ -480,10 +602,11 @@ export function showResult(o: {
 }): void {
   const p = openPopup('result', o.won ? t('win_title') : t('lose_title'), { closable: false });
   const starsHtml = `<div class="starrow">${[1, 2, 3].map((s) => img(A.ICON_STAR, o.won && o.stars >= s ? 'on' : '')).join('')}</div>`;
+  const left = goals.map((g) => `<div class="gchip${g.got >= g.need ? ' done' : ''}">${img(A.goalIcon(g.def, cfg.animal))}<b>${g.got >= g.need ? '✓' : g.need - g.got}</b></div>`).join('');
   const rows = o.won
     ? `<div class="bigstar">${img(A.ICON_STAR)} ${o.delta > 0 ? t('stars_earned', { n: o.delta }) : t('stars_none')}</div><div class="muted center">${t('star_delta')}</div>
        <div class="reward">${img(A.ICON_COIN)} ${t('coins_earned', { n: o.coins })}</div>`
-    : `<div class="center muted">${t('goal')}: ${Math.min(collected, cfg.goal.qty)}/${cfg.goal.qty}</div>`;
+    : `<div class="goals result">${left}</div>`;
   p.body.innerHTML = `<div class="center muted">${t('lvl')} ${cfg.id}</div>${starsHtml}${rows}`;
   if (!o.won && o.onRevive) {
     const box = el(`<div class="revive"><div class="info"><b>${t('continue_')}</b><small>${t('revive_offer', { n: REVIVE_MOVES })}</small></div>
@@ -518,22 +641,47 @@ function frame(ts: number): void {
   const done = tweens.filter((tw) => tw.t >= tw.dur);
   tweens = tweens.filter((tw) => tw.t < tw.dur);
   for (const tw of done) tw.resolve?.();
-  for (const f of flyers) f.t += dt / 0.45;
+  for (const m of movers) {
+    m.t += dt * 1000;
+    placeOnPath(m.view, m.pts, easeBounce(Math.min(1, m.t / m.dur)));
+  }
+  const arrived = movers.filter((m) => m.t >= m.dur);
+  movers = movers.filter((m) => m.t < m.dur);
+  for (const m of arrived) m.resolve();
+  for (const f of flyers) f.t += dt / 0.5;
   flyers = flyers.filter((f) => f.t < 1);
-  for (const f of fxs) f.t += dt / 0.5;
+  for (const f of fxs) f.t += (dt * 1000) / f.dur;
   fxs = fxs.filter((f) => f.t < 1);
   if (!locked && !over && !hint && !armed && performance.now() - idleSince > hintDelay) showHint();
   draw();
 }
 
+function placeOnPath(v: View, pts: { x: number; y: number }[], k: number): void {
+  if (pts.length < 2) { v.x = pts[0].x; v.y = pts[0].y; return; }
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  let d = Math.max(0, Math.min(1, k)) * total;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (d <= seg || i === pts.length - 1) {
+      const f = seg ? Math.min(1, d / seg) : 1;
+      v.x = pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f;
+      v.y = pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f;
+      return;
+    }
+    d -= seg;
+  }
+}
+
 function draw(): void {
   if (!ctx || !board) return;
   const g = ctx;
+  const b = board;
   g.clearRect(0, 0, 400, 800);
   g.save();
   if (shakeT > 0) g.translate(Math.sin(clock * 90) * 3, 0);
   // The tray: ground shadow, the dark front face, the wooden rim, then the field.
-  const fx0 = BX - 10, fy0 = BY - 10, fw = W + 20, fh = W + 20;
+  const fx0 = BX - 10, fy0 = BY - 10, fw = W + 20, fh = H + 20;
   g.fillStyle = 'rgba(0,0,0,.18)';
   roundRect(g, fx0 + 6, fy0 + TRAY_DEPTH + 8, fw, fh, 18);
   g.fill();
@@ -546,27 +694,34 @@ function draw(): void {
   g.fillStyle = '#7a4a1f';
   roundRect(g, fx0, fy0, fw, fh, 18);
   g.fill();
-  g.fillStyle = '#b5733a';
+  g.fillStyle = '#9c6230';
   roundRect(g, fx0 + 4, fy0 + 4, fw - 8, fh - 8, 14);
   g.fill();
   g.fillStyle = '#c98b4a';
   roundRect(g, fx0 + 4, fy0 + 4, fw - 8, 5, 4);
   g.fill();
-  for (let r = 0; r < BOARD_SIZE; r++) for (let c = 0; c < BOARD_SIZE; c++) {
-    g.fillStyle = (r + c) % 2 === 0 ? '#9ad97a' : '#86c968';
-    g.fillRect(BX + c * CELL, BY + r * CELL, CELL, CELL);
+  // Field cells: grass checker, or plowable soil. Holes show the tray's wood.
+  for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) {
+    if (!b.mask[r][c]) continue;
+    const x0 = BX + c * CELL, y0 = BY + r * CELL;
+    if (b.soil[r][c]) g.drawImage(sprite('soil'), x0, y0, CELL, CELL);
+    else { g.fillStyle = (r + c) % 2 === 0 ? '#9ad97a' : '#86c968'; g.fillRect(x0, y0, CELL, CELL); }
   }
-  // Inner shade along the top and left edges makes the field sit inside the tray.
-  const shadeTop = g.createLinearGradient(0, BY, 0, BY + 16);
-  shadeTop.addColorStop(0, 'rgba(0,0,0,.24)');
-  shadeTop.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = shadeTop;
-  g.fillRect(BX, BY, W, 16);
-  const shadeLeft = g.createLinearGradient(BX, 0, BX + 10, 0);
-  shadeLeft.addColorStop(0, 'rgba(0,0,0,.16)');
-  shadeLeft.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = shadeLeft;
-  g.fillRect(BX, BY, 10, W);
+  // Inner shade on the top edge of the field.
+  const shade = g.createLinearGradient(0, BY, 0, BY + 14);
+  shade.addColorStop(0, 'rgba(0,0,0,.22)');
+  shade.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = shade;
+  for (let c = 0; c < b.cols; c++) if (b.mask[0][c]) g.fillRect(BX + c * CELL, BY, CELL, 14);
+  // Exits for animals: green arrows under the bottom row.
+  if (b.animalKind) {
+    g.fillStyle = '#3fa63a';
+    for (let c = 0; c < b.cols; c++) {
+      if (!b.isExit(b.rows - 1, c)) continue;
+      const x = cx(c), y = BY + H + 3 + Math.sin(clock * 5) * 1.5;
+      g.beginPath(); g.moveTo(x - 7, y); g.lineTo(x + 7, y); g.lineTo(x, y + 8); g.closePath(); g.fill();
+    }
+  }
   // Selection / hint
   const ring = (p: Pos, color: string, w: number): void => {
     g.strokeStyle = color;
@@ -577,47 +732,150 @@ function draw(): void {
   if (selected) ring(selected, '#fff', 4);
   if (hint) { const k = 3 + Math.sin(clock * 8) * 1.5; ring(hint.a, '#ffe16b', k); ring(hint.b, '#ffe16b', k); }
   if (armed) {
-    // A soft pulse over the whole field says "pick a tile".
+    // A soft pulse over the whole field says "pick a spot".
     g.fillStyle = `rgba(255,225,107,${0.08 + Math.sin(clock * 5) * 0.05})`;
-    g.fillRect(BX, BY, W, W);
+    for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) if (b.mask[r][c]) g.fillRect(BX + c * CELL, BY + r * CELL, CELL, CELL);
   }
-  // Tiles, with a ground shadow each so they sit on the field
+  // Blockers
+  for (let r = 0; r < b.rows; r++) for (let c = 0; c < b.cols; c++) {
+    const bk = b.block[r][c];
+    if (!bk) continue;
+    const key = bk.type === 'mud' ? 'mud' : bk.hp >= 2 ? 'crate2' : 'crate1';
+    g.drawImage(sprite(key), BX + c * CELL + 1, BY + r * CELL + 1, CELL - 2, CELL - 2);
+  }
+  // Tiles, clipped to the board so new ones slide in from under the rim.
+  g.save();
+  g.beginPath();
+  g.rect(BX, BY, W, H);
+  g.clip();
   const pulse = 1 + Math.sin(clock * 4) * 0.03;
-  const ordered = [...views.values()].sort((a, b) => a.y - b.y);
-  for (const v of ordered) drawTile(g, v.tile.kind, v.x, v.y, v.s * (v.tile.kind === cfg.goal.tile ? pulse : 1), v.a);
-  for (const v of fading) drawTile(g, v.tile.kind, v.x, v.y, v.s, v.a);
-  // The shovel swing over a dug tile
-  for (const f of fxs) {
-    const k = f.t;
-    const angle = -0.9 + easeOut(Math.min(1, k / 0.5)) * 1.3;
-    g.save();
-    g.globalAlpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
-    g.translate(f.x + 8, f.y - 10);
-    g.rotate(angle);
-    g.drawImage(sprite('shovel'), -12, -36, 46, 46);
-    g.restore();
+  const ordered = [...views.values()].sort((p, q) => p.y - q.y);
+  for (const v of ordered) {
+    const goalish = goals.some((gl) => gl.got < gl.need && ((gl.def.type === 'collect' && gl.def.tile === v.tile.kind) || (gl.def.type === 'animal' && v.tile.animal)));
+    drawTile(g, v.tile, v.x, v.y, v.s * (goalish ? pulse : 1), v.a);
   }
+  for (const v of fading) drawTile(g, v.tile, v.x, v.y, v.s, v.a);
   g.restore();
-  // Flyers to the goal box
+  drawFx(g);
+  g.restore();
+  // Flyers to the goal chips
   for (const f of flyers) {
     const k = easeInOut(f.t);
     const x = f.x + (f.tx - f.x) * k;
     const y = f.y + (f.ty - f.y) * k - Math.sin(k * Math.PI) * 60;
-    drawTile(g, f.kind, x, y, 1 - k * 0.5, 1, false);
+    const size = (CELL - PAD * 2) * (1 - k * 0.45);
+    g.drawImage(sprite(f.key), x - size / 2, y - size / 2, size, size);
   }
 }
 
-function drawTile(g: CanvasRenderingContext2D, kind: TileKind, x: number, y: number, s: number, a: number, shadow = true): void {
+function drawFx(g: CanvasRenderingContext2D): void {
+  for (const f of fxs) {
+    const k = f.t;
+    const fade = 1 - k;
+    if (f.kind === 'row' || f.kind === 'col' || f.kind === 'cross') {
+      // A tractor drives the line, plowing a bright furrow behind it.
+      for (const dir of f.kind === 'cross' ? ['row', 'col'] : [f.kind]) {
+        g.save();
+        g.globalAlpha = fade;
+        g.fillStyle = '#fff6c8';
+        if (dir === 'row') g.fillRect(BX, f.y - CELL * 0.32, W, CELL * 0.64);
+        else g.fillRect(f.x - CELL * 0.32, BY, CELL * 0.64, H);
+        g.globalAlpha = 1;
+        const s = CELL * 1.15;
+        if (dir === 'row') {
+          const x = BX - s / 2 + (W + s) * easeInOut(k);
+          g.drawImage(sprite('tractor'), x - s / 2, f.y - s * 0.55, s, s * 0.78);
+        } else {
+          const y = BY - s / 2 + (H + s) * easeInOut(k);
+          g.translate(f.x, y);
+          g.rotate(Math.PI / 2);
+          g.drawImage(sprite('tractor'), -s / 2, -s * 0.4, s, s * 0.78);
+        }
+        g.restore();
+      }
+    } else if (f.kind === 'rainbow') {
+      g.save();
+      g.lineWidth = 3;
+      g.globalAlpha = fade;
+      (f.targets ?? []).forEach((p, i) => {
+        g.strokeStyle = `hsl(${(i * 47 + clock * 240) % 360} 90% 60%)`;
+        g.beginPath();
+        g.moveTo(f.x, f.y);
+        g.lineTo(f.x + (p.x - f.x) * Math.min(1, k * 2.2), f.y + (p.y - f.y) * Math.min(1, k * 2.2));
+        g.stroke();
+      });
+      g.restore();
+    } else if (f.kind === 'witch') {
+      g.save();
+      if (k < 0.4) {
+        const d = k / 0.4;
+        const s = CELL * 1.3;
+        g.drawImage(sprite('witch'), f.x - s / 2, f.y - s / 2 - (1 - easeOut(d)) * 90, s, s);
+      } else {
+        const d = (k - 0.4) / 0.6;
+        g.globalAlpha = 1 - d;
+        g.fillStyle = 'rgba(164,92,255,.35)';
+        g.fillRect(f.x - CELL * 1.5, f.y - CELL * 1.5, CELL * 3, CELL * 3);
+        g.strokeStyle = '#c77dff';
+        g.lineWidth = 4;
+        g.beginPath();
+        g.arc(f.x, f.y, CELL * (0.5 + d * 1.6), 0, Math.PI * 2);
+        g.stroke();
+      }
+      g.restore();
+    } else if (f.kind === 'shovel') {
+      const angle = -0.9 + easeOut(Math.min(1, k / 0.5)) * 1.3;
+      g.save();
+      g.globalAlpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
+      g.translate(f.x + 8, f.y - 10);
+      g.rotate(angle);
+      g.drawImage(sprite('shovel'), -12, -36, 46, 46);
+      g.restore();
+    } else if (f.kind === 'puff') {
+      g.save();
+      g.globalAlpha = fade;
+      g.fillStyle = '#8a5a30';
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.4;
+        g.beginPath();
+        g.arc(f.x + Math.cos(a) * CELL * 0.55 * k, f.y + Math.sin(a) * CELL * 0.55 * k, 3.5 * fade + 1, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.restore();
+    } else {
+      g.save();
+      g.globalAlpha = fade;
+      g.fillStyle = '#fff3a0';
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        g.beginPath();
+        g.arc(f.x + Math.cos(a) * CELL * 0.45 * k, f.y + Math.sin(a) * CELL * 0.45 * k, 2.5, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.restore();
+    }
+  }
+}
+
+function drawTile(g: CanvasRenderingContext2D, tile: Tile, x: number, y: number, s: number, a: number): void {
   if (s <= 0.01 || a <= 0.01) return;
   const size = (CELL - PAD * 2) * s;
   g.globalAlpha = a;
-  if (shadow) {
-    g.fillStyle = 'rgba(0,0,0,.2)';
-    g.beginPath();
-    g.ellipse(x + 1, y + size * 0.44, size * 0.36, size * 0.11, 0, 0, Math.PI * 2);
-    g.fill();
+  g.fillStyle = 'rgba(0,0,0,.2)';
+  g.beginPath();
+  g.ellipse(x + 1, y + size * 0.44, size * 0.36, size * 0.11, 0, 0, Math.PI * 2);
+  g.fill();
+  const key = tile.animal ? tile.kind : tile.special === 'rainbow' ? 'rainbow' : tile.kind;
+  if (tile.special === 'rainbow') {
+    const k = size * (1.05 + Math.sin(clock * 6) * 0.04);
+    g.drawImage(sprite(key), x - k / 2, y - k / 2 - 2, k, k);
+  } else {
+    g.drawImage(sprite(key), x - size / 2, y - size / 2 - 2, size, size);
   }
-  g.drawImage(sprite(kind), x - size / 2, y - size / 2 - 2, size, size);
+  if (tile.special === 'row' || tile.special === 'col') {
+    g.globalAlpha = a * (0.85 + Math.sin(clock * 6) * 0.15);
+    g.drawImage(sprite(tile.special === 'row' ? 'stripe_row' : 'stripe_col'), x - size / 2, y - size / 2 - 2, size, size);
+  }
   g.globalAlpha = 1;
 }
 
@@ -631,19 +889,24 @@ function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number,
   g.closePath();
 }
 
-// QA hook (`?debug=1`): lets an automated test read the hint, tap cells and drive the booster.
+// QA hook (`?debug=1`): lets an automated test read the board, tap cells and drive the boosters.
 if (new URLSearchParams(location.search).has('debug')) {
   (window as unknown as { __hp: unknown }).__hp = {
-    hint: () => (board ? board.bestHint(cfg.goal.tile) : null),
+    hint: () => (board ? board.bestMove(goals) : null),
     moves: () => (board ? board.legalMoves() : []),
     cell: (p: Pos) => ({ x: cx(p.c), y: cy(p.r) }),
-    state: () => ({ moves, collected, locked, over, goal: cfg.goal.qty, armed: armed?.key ?? null, coins: St.S.wallet.coin, boosters: { ...St.S.boosters } }),
+    state: () => ({
+      level: cfg.id, moves, locked, over, armed: armed?.key ?? null, coins: St.S.wallet.coin, boosters: { ...St.S.boosters },
+      goals: goals.map((g) => ({ key: g.key, got: g.got, need: g.need })),
+    }),
+    board: () => board,
     arm: (key: string) => armBooster(key),
-    dig: (p: Pos) => dig(p),
+    use: (p: Pos) => useArmedAt(p),
     buy: (key: string) => St.buyBooster(key),
-    tileAt: (p: Pos) => board?.grid[p.r][p.c]?.kind ?? null,
+    tileAt: (p: Pos) => board?.grid[p.r][p.c] ?? null,
     swap: (a: Pos, b: Pos) => trySwap(a, b),
+    play: async () => { const m = board?.bestMove(goals); if (m) await trySwap(m.a, m.b); return m; },
     setMoves: (n: number) => { moves = n; hudSig = ''; updateHud(); },
-    setCollected: (n: number) => { collected = n; hudSig = ''; updateHud(); },
+    nearWin: () => { for (const g of goals) g.got = Math.max(g.got, g.need - 1); hudSig = ''; updateHud(); },
   };
 }

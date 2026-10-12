@@ -492,9 +492,12 @@ export function openMatchMap(): void {
       const best = S.match.bestStars[String(cfg.id)] ?? 0;
       const unlocked = levelUnlocked(i);
       if (current < 0 && unlocked && best === 0) current = i;
-      const b = el(`<button class="lvlbtn${unlocked ? '' : ' locked'}${current === i ? ' current' : ''}"><b>${cfg.id}</b>
+      // Hard, Super Hard and Boss levels wear a coloured frame and tag, the way the saga map flags them.
+      const diff = cfg.difficulty === 'hard' || cfg.difficulty === 'superhard' || cfg.difficulty === 'boss' ? cfg.difficulty : '';
+      const b = el(`<button class="lvlbtn${unlocked ? '' : ' locked'}${current === i ? ' current' : ''}${diff ? ` ${diff}` : ''}"><b>${cfg.id}</b>
+        ${diff ? `<em class="diff ${diff}">${t(`diff_${diff}`)}</em>` : ''}
         <div class="st">${[1, 2, 3].map((s) => img(A.ICON_STAR, best >= s ? 'on' : '')).join('')}</div>
-        <div class="g">${img(A.TILE_ART[cfg.goal.tile])}${cfg.goal.qty} ${img(A.ICON_CLOCK)}${cfg.moves}${unlocked ? '' : ' 🔒'}</div></button>`);
+        <div class="g">${cfg.goals.map((g) => img(A.goalIcon(g, cfg.animal))).join('')} ${img(A.ICON_CLOCK)}${cfg.moves}${unlocked ? '' : ' 🔒'}</div></button>`);
       b.addEventListener('click', () => { if (unlocked) handlers.playLevel(i); else toast(t('locked'), 'warn'); });
       grid.appendChild(b);
     });

@@ -425,16 +425,143 @@ ${face(50, 56, 44)}`),
 <ellipse cx="14" cy="36" rx="12" ry="7" transform="rotate(22 14 36)"/><ellipse cx="14" cy="64" rx="12" ry="7" transform="rotate(-22 14 64)"/><ellipse cx="86" cy="36" rx="12" ry="7" transform="rotate(-22 86 36)"/><ellipse cx="86" cy="64" rx="12" ry="7" transform="rotate(22 86 64)"/></g>
 <circle cx="50" cy="50" r="27" fill="#7a4a1c"/><circle cx="50" cy="50" r="23" fill="#9a6230"/>
 ${face(50, 48, 46, '#3a1f08')}`),
+  corn: svg(100, 100, `
+<defs><linearGradient id="tco" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe680"/><stop offset="1" stop-color="#f2b01c"/></linearGradient></defs>
+<path d="M50 6c17 0 25 22 25 44s-9 40-25 42c-16-2-25-20-25-42S33 6 50 6z" fill="url(#tco)" stroke="#d99a12" stroke-width="2"/>
+<g fill="#ffd24a" stroke="#e0a312" stroke-width="1"><circle cx="40" cy="20" r="4"/><circle cx="50" cy="16" r="4"/><circle cx="60" cy="20" r="4"/><circle cx="34" cy="30" r="4"/><circle cx="66" cy="30" r="4"/><circle cx="32" cy="66" r="4"/><circle cx="68" cy="66" r="4"/></g>
+<path d="M22 56c-8 12-6 32 12 38 8 3 14 0 16-2C38 86 28 74 22 56z" fill="#5fc256"/><path d="M78 56c8 12 6 32-12 38-8 3-14 0-16-2 12-6 22-18 28-36z" fill="#3e9a3c"/>
+<ellipse cx="40" cy="30" rx="4" ry="9" fill="#fff" opacity=".4"/>
+${face(50, 46, 42)}`),
+  blueberry: svg(100, 100, `
+<defs><radialGradient id="tbl" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#8fb4ff"/><stop offset="1" stop-color="#2f4fc4"/></radialGradient></defs>
+<circle cx="50" cy="54" r="40" fill="url(#tbl)"/>
+<path d="M38 18l5 9 7-9 7 9 5-9 2 13H36z" fill="#22388f"/>
+<ellipse cx="32" cy="40" rx="8" ry="13" fill="#fff" opacity=".3" transform="rotate(-25 32 40)"/>
+${face(50, 58, 46, '#1a2560')}`),
 };
 
+// ---------------------------------------------------------------------------
+// Match board: power-ups, blockers, soil and animals
+
+/** Rainbow Seed (5 in a line): swap it with a cropsy to clear every one of that kind. */
+export const RAINBOW_SEED = svg(100, 100, `
+<defs><radialGradient id="rgw" cx="50%" cy="50%" r="50%"><stop offset=".55" stop-color="#fff7c0" stop-opacity=".9"/><stop offset="1" stop-color="#fff7c0" stop-opacity="0"/></radialGradient>
+<linearGradient id="rgs" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5a5a"/><stop offset=".2" stop-color="#ff9a2e"/><stop offset=".4" stop-color="#ffd23a"/><stop offset=".6" stop-color="#5cc24a"/><stop offset=".8" stop-color="#4aa8ff"/><stop offset="1" stop-color="#a45cff"/></linearGradient></defs>
+<circle cx="50" cy="54" r="46" fill="url(#rgw)"/>
+<path d="M50 12C72 28 80 46 80 62a30 30 0 0 1-60 0c0-16 8-34 30-50z" fill="#6b3f17"/>
+<path d="M50 17C69 31 75 47 75 62a25 25 0 0 1-50 0c0-15 6-31 25-45z" fill="url(#rgs)"/>
+<path d="M34 52q16-7 32 0M30 66q20-7 40 0M34 80q16-6 32 0" stroke="#fff" stroke-width="3" opacity=".45" fill="none" stroke-linecap="round"/>
+<ellipse cx="40" cy="44" rx="5" ry="10" fill="#fff" opacity=".55" transform="rotate(-20 40 44)"/>
+<path d="M50 14c-3-9 4-13 12-11-2 7-7 10-12 11z" fill="#4fb84a"/>
+<g fill="#fff"><path d="M84 18l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/><path d="M14 30l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5z"/></g>`);
+
+/** The tire-track band laid over a Tractor Cropsy (4 in a line); the column version is the same band turned upright. */
+const stripe = (rot: number): string => svg(100, 100, `<g transform="rotate(${rot} 50 50)">
+<rect x="3" y="35" width="94" height="30" rx="15" fill="#fff" opacity=".88" stroke="#ff7a1e" stroke-width="3"/>
+<g fill="#7a4a1f"><path d="M20 41l8 9-8 9h7l8-9-8-9z"/><path d="M40 41l8 9-8 9h7l8-9-8-9z"/><path d="M60 41l8 9-8 9h7l8-9-8-9z"/></g>
+<path d="M2 50l11-11v22zM98 50l-11-11v22z" fill="#ff7a1e"/></g>`);
+export const STRIPE_ROW = stripe(0);
+export const STRIPE_COL = stripe(90);
+
+export const ICON_TRACTOR = svg(72, 56, `
+<ellipse cx="36" cy="52" rx="30" ry="3.5" fill="#000" opacity=".18"/>
+<path d="M8 26h40l8 8v8H8z" fill="#e8413c"/><path d="M8 26h40l3 3H8z" fill="#ff6b5a"/>
+<rect x="22" y="8" width="22" height="20" rx="3" fill="#c8302a"/><rect x="25" y="11" width="15" height="11" rx="2" fill="#bfe6ff"/>
+<rect x="50" y="10" width="4" height="16" rx="1.5" fill="#4a4a4a"/>
+<circle cx="20" cy="40" r="13" fill="#2f2f2f"/><circle cx="20" cy="40" r="6" fill="#ffd23a"/>
+<circle cx="54" cy="44" r="8" fill="#2f2f2f"/><circle cx="54" cy="44" r="3.5" fill="#ffd23a"/>`);
+
+export const MUD_TILE = svg(100, 100, `
+<path d="M8 62C2 44 16 28 30 28c4-12 22-16 32-6 14-4 30 8 28 24 10 8 6 32-10 34-8 12-30 14-40 6-14 6-36-4-32-24z" fill="#6e4524"/>
+<path d="M14 58C10 44 22 34 34 34c4-9 18-12 26-4 12-3 24 6 22 18 8 6 4 24-8 26-6 9-24 10-32 4-11 4-30-4-28-20z" fill="#8d5d32"/>
+<g fill="#5a3518"><ellipse cx="36" cy="60" rx="7" ry="4"/><ellipse cx="62" cy="70" rx="9" ry="4.5"/><ellipse cx="66" cy="48" rx="5" ry="3"/></g>
+<ellipse cx="40" cy="44" rx="10" ry="4" fill="#b98a5a" opacity=".55"/>
+<g stroke="#4aa842" stroke-width="4" stroke-linecap="round" fill="none"><path d="M28 32l-4-14M28 32l5-12"/><path d="M72 30l-2-15M72 30l7-11"/></g>`);
+
+const crate = (cracked: boolean): string => svg(100, 100, `
+<rect x="5" y="5" width="90" height="90" rx="9" fill="#7a4a1f"/>
+<rect x="11" y="11" width="78" height="78" rx="5" fill="${cracked ? '#b8823f' : '#cf9150'}"/>
+<path d="M11 37h78M11 63h78" stroke="#8a5a2b" stroke-width="3"/>
+<rect x="11" y="11" width="78" height="5" fill="#e9b371" opacity=".8"/>
+<path d="M16 84L84 16" stroke="#7a4a1f" stroke-width="11" stroke-linecap="round"/><path d="M16 84L84 16" stroke="${cracked ? '#d4a062' : '#e6ab6a'}" stroke-width="5" stroke-linecap="round"/>
+<g fill="#4a2a0e"><circle cx="16" cy="16" r="3"/><circle cx="84" cy="16" r="3"/><circle cx="16" cy="84" r="3"/><circle cx="84" cy="84" r="3"/></g>
+${cracked ? '<path d="M30 11l6 16-9 10 12 14-5 18M70 89l-5-14 9-9-6-12" stroke="#3a2008" stroke-width="3" fill="none" stroke-linejoin="round"/><path d="M76 11h13v13z" fill="#7a4a1f"/>' : ''}`);
+export const CRATE_TILE = crate(false);
+export const CRATE_CRACKED = crate(true);
+
+export const SOIL_TILE = svg(100, 100, `
+<rect width="100" height="100" fill="#8a5a30"/>
+<path d="M0 14h100M0 38h100M0 62h100M0 86h100" stroke="#6b4421" stroke-width="11"/>
+<path d="M0 22h100M0 46h100M0 70h100M0 94h100" stroke="#b07c4a" stroke-width="3" opacity=".75"/>`);
+export const ICON_SOIL = svg(64, 64, `
+<path d="M4 40L32 26l28 14-28 14z" fill="#8a5a30"/><path d="M4 40v6l28 14v-6zM60 40v6L32 60v-6z" fill="#5a371a"/>
+<path d="M14 38l24 12M22 34l24 12M30 30l24 12" stroke="#6b4421" stroke-width="3"/>
+<path d="M32 30v-14M32 22c-6-6-12-4-12 0 6 2 10 2 12 0zM32 18c4-8 12-8 12-3-5 3-9 4-12 3z" stroke="#4aa842" stroke-width="3" fill="#62c457" stroke-linejoin="round"/>`);
+
+export const CHICK_TILE = svg(100, 100, `
+<ellipse cx="50" cy="93" rx="26" ry="5" fill="#000" opacity=".15"/>
+<ellipse cx="17" cy="62" rx="8" ry="13" fill="#f7c62a" transform="rotate(25 17 62)"/><ellipse cx="83" cy="62" rx="8" ry="13" fill="#f7c62a" transform="rotate(-25 83 62)"/>
+<circle cx="50" cy="56" r="35" fill="#ffd23a"/><circle cx="50" cy="52" r="29" fill="#ffe680"/>
+<path d="M44 21c-3-9 4-11 7-5 2-7 9-5 7 2" stroke="#f2b01c" stroke-width="4" fill="none" stroke-linecap="round"/>
+<g fill="#2b2b2b"><ellipse cx="38" cy="50" rx="4" ry="5"/><ellipse cx="62" cy="50" rx="4" ry="5"/></g><g fill="#fff"><circle cx="39.5" cy="48" r="1.4"/><circle cx="63.5" cy="48" r="1.4"/></g>
+<path d="M43 60l7 7 7-7z" fill="#ff8a1e"/><g fill="#ff8a8a" opacity=".6"><circle cx="30" cy="62" r="5"/><circle cx="70" cy="62" r="5"/></g>`);
+
+export const PIGLET_TILE = svg(100, 100, `
+<ellipse cx="50" cy="93" rx="28" ry="5" fill="#000" opacity=".15"/>
+<path d="M18 22l6 26 18-16z" fill="#ff8fab"/><path d="M82 22l-6 26-18-16z" fill="#ff8fab"/>
+<circle cx="50" cy="56" r="37" fill="#ffadc0"/><circle cx="50" cy="53" r="32" fill="#ffc4d2"/>
+<ellipse cx="50" cy="64" rx="15" ry="11" fill="#ff8fab"/><g fill="#c4506e"><ellipse cx="45" cy="64" rx="3" ry="4.5"/><ellipse cx="55" cy="64" rx="3" ry="4.5"/></g>
+<g fill="#2b2b2b"><ellipse cx="36" cy="46" rx="4" ry="5"/><ellipse cx="64" cy="46" rx="4" ry="5"/></g><g fill="#fff"><circle cx="37.5" cy="44" r="1.4"/><circle cx="65.5" cy="44" r="1.4"/></g>
+<g fill="#ff6f8f" opacity=".55"><circle cx="26" cy="60" r="5"/><circle cx="74" cy="60" r="5"/></g>`);
+
+// Boosters 2 and 3
+/** Lucky Horseshoe: +5 moves. */
+export const ICON_HORSESHOE = svg(64, 64, `
+<defs><linearGradient id="hsg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff2a0"/><stop offset="1" stop-color="#e0a412"/></linearGradient></defs>
+<ellipse cx="30" cy="59" rx="20" ry="4" fill="#000" opacity=".15"/>
+<path d="M12 56V32a18 18 0 0 1 36 0v24H37V32a7 7 0 0 0-14 0v24z" fill="url(#hsg)" stroke="#b57a0a" stroke-width="2.5" stroke-linejoin="round"/>
+<g fill="#8a5a0a"><circle cx="17.5" cy="48" r="1.8"/><circle cx="16.5" cy="38" r="1.8"/><circle cx="42.5" cy="48" r="1.8"/><circle cx="43.5" cy="38" r="1.8"/></g>
+<path d="M16 30a14 14 0 0 1 10-12" stroke="#fff" stroke-width="2.5" fill="none" opacity=".7" stroke-linecap="round"/>
+<circle cx="48" cy="15" r="13" fill="#3fa63a" stroke="#fff" stroke-width="3"/>
+<text x="48" y="20" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="13" text-anchor="middle" fill="#fff">+5</text>`);
+
+/** Witch Fruit: a bewitched plum in a pointy hat; clears a 3×3 patch. */
+export const ICON_WITCH = svg(64, 64, `
+<defs><radialGradient id="wfg" cx="38%" cy="35%" r="70%"><stop offset="0" stop-color="#d9a2ff"/><stop offset="1" stop-color="#6a1fb8"/></radialGradient></defs>
+<ellipse cx="32" cy="60" rx="18" ry="3.5" fill="#000" opacity=".15"/>
+<circle cx="32" cy="40" r="23" fill="#c77dff" opacity=".25"/>
+<circle cx="32" cy="40" r="19" fill="url(#wfg)"/>
+<ellipse cx="24" cy="34" rx="4" ry="7" fill="#fff" opacity=".35" transform="rotate(-20 24 34)"/>
+<path d="M12 24h40l-4 4H16z" fill="#2b1a3a"/><path d="M19 24c4-2 7-13 17-21 1 7 5 15 9 21z" fill="#3a2350"/><path d="M21 21h21" stroke="#ffd23a" stroke-width="3"/>
+<g fill="#1a0a2a"><circle cx="25" cy="40" r="2.6"/><circle cx="39" cy="40" r="2.6"/></g>
+<path d="M24 47q8 6 16 0" stroke="#1a0a2a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+<g fill="#b6ff6b"><path d="M54 12l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z"/><path d="M8 44l1.2 3 3 1.2-3 1.2-1.2 3-1.2-3-3-1.2 3-1.2z"/></g>`);
+
+/** The goal icon for "collect any cropsies". */
+export const ICON_BASKET = svg(64, 64, `
+<path d="M14 28c0-14 36-14 36 0" stroke="#8a5a2b" stroke-width="4" fill="none"/>
+<circle cx="22" cy="30" r="8" fill="#e8413c"/><circle cx="34" cy="27" r="8" fill="#ffd23a"/><circle cx="44" cy="31" r="7" fill="#ff8a3d"/>
+<path d="M8 32h48l-6 24H14z" fill="#c98b4a" stroke="#8a5a2b" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="M12 40h40M14 48h36M22 32l2 24M32 32v24M42 32l-2 24" stroke="#8a5a2b" stroke-width="2"/>`);
+
 export const TILE_COLORS: Record<string, string> = {
-  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#e8413c', berry: '#ff4d8a', sunflower: '#ffd23a',
+  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#e8413c', berry: '#ff4d8a', sunflower: '#ffd23a', corn: '#f7cf3a', blueberry: '#4a6fe0',
 };
 
 export const ITEM_ICON: Record<string, string> = {
   wheat: ICON_WHEAT, corn: ICON_CORN, egg: ICON_EGG, feed: ICON_FEED, bread: ICON_BREAD,
   nail: ICON_NAIL, screw: ICON_SCREW, bolt: ICON_BOLT, tape: ICON_TAPE,
-  coin: ICON_COIN, star: ICON_STAR, xp: ICON_XP, chicken: ICON_CHICKEN, shovel: ICON_SHOVEL,
+  coin: ICON_COIN, star: ICON_STAR, xp: ICON_XP, chicken: ICON_CHICKEN,
+  shovel: ICON_SHOVEL, moves: ICON_HORSESHOE, witch: ICON_WITCH,
 };
+
+/** The HUD icon of a match goal. */
+export function goalIcon(g: { type: string; tile?: string }, animal?: string): string {
+  if (g.type === 'collect') return g.tile === 'any' ? ICON_BASKET : TILE_ART[g.tile!];
+  if (g.type === 'mud') return MUD_TILE;
+  if (g.type === 'crate') return CRATE_TILE;
+  if (g.type === 'soil') return ICON_SOIL;
+  return animal === 'piglet' ? PIGLET_TILE : CHICK_TILE;
+}
 
 export const svgUrl = (s: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
