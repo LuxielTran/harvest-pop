@@ -47,8 +47,9 @@ export function el<T extends HTMLElement = HTMLElement>(html: string): T {
   return tpl.content.firstElementChild as T;
 }
 
-export const img = (svg: string, cls = '', size?: number): string =>
-  `<img src="${svgUrl(svg)}" class="${cls}" alt=""${size ? ` style="width:${size}px;height:${size}px"` : ''}>`;
+// `art` is inline SVG markup or an ASSET url (see art.ts).
+export const img = (art: string, cls = '', size?: number): string =>
+  `<img src="${svgUrl(art)}" class="${cls}" alt=""${size ? ` style="width:${size}px;height:${size}px"` : ''}>`;
 
 export function fmtTime(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
