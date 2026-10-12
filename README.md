@@ -39,45 +39,70 @@ Một màn = bản đồ ASCII + mục tiêu trong `src/config.ts`:
 | `a` | Thú nuôi xuất phát (Gà con hoặc Heo con); thu khi xuống tới hàng dưới cùng (mũi tên xanh) |
 
 Mục tiêu: thu cropsy (một loại hoặc `any`), dọn hết Bùn, phá hết Thùng, cày hết Đất, đưa N thú xuống. Tối đa 3 mục tiêu một màn.
-Nhịp độ khó theo tài liệu: 1–10 làm quen (màn 10 chặn cửa đầu tiên), 11–25 răng cưa, 26–50 vòng lặp
+Nhịp độ khó theo tài liệu: 1–10 làm quen (dễ thở để gom xu, màn 10 chặn cửa đầu tiên), 11–25 răng cưa, 26–50 vòng lặp
 siêu dễ → thường → thường → khó, màn 50 là Trùm. Các màn khó có **chỗ kẹt** (ô bị cô lập, đất bị thùng vây,
 bùn chặn nút thắt) chỉ với tới bằng power-up hoặc booster.
 
-Mỗi màn có `powerChance`: tỉ lệ một cropsy mới rơi xuống sẵn là Cropsy Máy Cày, cao ở màn dễ và thấp ở màn khó,
-cộng với power-up sinh ra khi người chơi ghép hoặc khi cascade tự ghép 4/5.
+Số lượt 20–50 tùy độ phức tạp của màn. Mục tiêu thu cropsy không vượt **2,5 / lượt** (giỏ "cropsy bất kỳ": 6 / lượt),
+nên không còn kiểu "200 cà rốt trong 20 lượt"; độ khó đến từ số loại cropsy (4 ở màn siêu dễ, 5 ở các màn còn lại),
+vật cản, bố cục và số lượt.
 
-Số lượng mục tiêu và số lượt được chỉnh bằng bot: bot tham lam có tính mục tiêu chơi mỗi màn 60 lần, không booster
-và với 1 booster mỗi loại (kết quả ở `LEVELS.md`). Dải mục tiêu của bot: hướng dẫn / siêu dễ / dễ ≈ 95–100% (còn dư lượt),
-thường ≈ 65–85%, khó ≈ 30–45%, siêu khó ≈ 10–20%, trùm ≈ 30%; có booster thì màn khó lên ≈ 70–85%.
+Mỗi màn có `powerChance` (tỉ lệ một cropsy mới rơi xuống sẵn là Cropsy Máy Cày) và có thể có `hives` (cột có tổ ong
+thả Ong Chăm Chỉ), cộng với power-up sinh ra khi người chơi ghép hoặc khi cascade tự ghép.
+
+Số lượng mục tiêu và số lượt được chỉnh bằng bot **mô phỏng người chơi**: chỉ đánh giá kết quả nhìn thấy của nước đi
+(không đoán cascade) và đôi khi chọn nước tốt thứ 2–3. Mỗi màn chạy không booster và với 1 booster mỗi loại (kết quả ở `LEVELS.md`).
+
+## Tutorial lần đầu
+
+Lần đầu một power-up, vật cản, mục tiêu hay booster xuất hiện, màn đó mở một **thẻ hướng dẫn** (hình minh hoạ + lời giải
+thích), rồi **dẫn tay** lần dùng đầu tiên. Mỗi tutorial chỉ hiện một lần (lưu trong `userData.hp.tips`).
+
+| Màn | Dạy | Cách dẫn |
+|---|---|---|
+| 1 | Ghép 3, mục tiêu thu cropsy | tutorial nông trại (bong bóng) |
+| 2 / 3 / 7 / 9 | Máy Cày / Bó Rơm / Ong + tổ ong / Hạt Cầu Vồng | bàn tay chỉ nước đổi tạo ra power-up (nếu bàn chưa có, game xếp sẵn một chỗ), rồi khoanh power-up vừa tạo: "giờ ghép nó" |
+| 4 / 12 / 14 / 22 | Bùn / Thùng gỗ / Đất / Đất dưới thùng | khoanh các ô đó + bàn tay chỉ một nước tốt |
+| 6 / 13 / 50 | Gà con / Heo con / mục tiêu "cropsy bất kỳ" | khoanh thú + nước gợi ý |
+| 5 / 8 / 10 | Xẻng vàng / Móng ngựa / Quả Phù Thủy | **tặng 1 cái**, bàn tay chỉ nút booster, rồi chỉ ô dùng tốt nhất |
 
 ## Power-up (cropsy đặc biệt)
 
+Thứ tự ưu tiên khi một nước tạo nhiều hình (như Candy Crush): Hạt Cầu Vồng > Bó Rơm > Máy Cày > Ong.
+
 | Tạo bằng | Tên | Tác dụng |
 |---|---|---|
-| Đúng 4 thành hàng | **Cropsy Máy Cày** (Tractor Cropsy) — cropsy mang dải vết bánh xe | Máy cày chạy hết một hàng (ghép dọc) hoặc một cột (ghép ngang) |
+| Đúng 4 thành hàng | **Cropsy Máy Cày** (Tractor Cropsy) — dải vết bánh xe | Máy cày chạy hết một hàng (ghép dọc) hoặc một cột (ghép ngang) |
+| 5 ô hình chữ T / L (hai đường cắt nhau) | **Cropsy Bó Rơm** (Hay Bale Cropsy) — vòng rơm buộc nơ đỏ | Nổ vùng 3×3, mỗi vật cản trong vùng mất **2 lớp** (thùng gỗ vỡ hẳn) |
 | 5+ thành hàng | **Hạt Cầu Vồng** (Rainbow Seed) | Đổi với một cropsy: xoá mọi cropsy loại đó; đổi với Hạt Cầu Vồng khác: xoá cả bàn |
+| Ô vuông 2×2 (hoặc rơi từ **tổ ong**) | **Ong Chăm Chỉ** (Busy Bee) — cropsy có chú ong | Bay tới 3 mục tiêu ưu tiên (đất → vật cản cần phá → cropsy cần thu), mỗi mục tiêu mất 1 lớp; chui **dưới vật cản** để cày đất |
 
-Máy Cày + Máy Cày = cày chữ thập. Power-up bị blast trúng sẽ tự kích hoạt (dây chuyền). Blast quét qua cả ô trống.
+Combo khi đổi hai power-up: Máy Cày + Máy Cày = chữ thập; Bó Rơm + Máy Cày = 3 hàng + 3 cột; Bó Rơm + Bó Rơm = nổ 5×5;
+Ong + bất kỳ = cả hai cùng kích hoạt. Power-up bị blast trúng sẽ tự kích hoạt (dây chuyền). Blast quét qua cả ô trống.
+Game không có vật cản kiểu "kẹo cam thảo" nên Máy Cày không bị "hút"; ưu thế tương ứng của Bó Rơm là phá 2 lớp mỗi vật cản.
 
 ## Xu (Coin) có ba việc
 
+Người chơi mới bắt đầu với **500 xu**.
+
 | Việc | Số liệu (`src/config.ts`) | Ở đâu |
 |---|---|---|
-| Thưởng qua màn | `WIN_COINS = 40` lần đầu qua màn; `REPLAY_COINS = 10` khi chơi lại màn đã qua | popup "Qua màn!" |
+| Thưởng qua màn | Màn siêu dễ / dễ / thường: 1★ 20, 2★ 40, 3★ 80. Màn khó / siêu khó / trùm: 1★ 40, 2★ 80, 3★ 160 | popup "Qua màn!" |
 | Mua booster | `BOOSTERS[].price = 300` / 1 đơn vị | thanh booster dưới bàn (bấm ô "+"), hoặc Shop ở nông trại |
 | Hồi sinh khi thua | `REVIVE_PRICE = 900` → `+REVIVE_MOVES = 5` lượt | nút "Tiếp tục" trên popup "Hết lượt" |
 
-Xu cũng vẫn dùng mua ruộng, chuồng, gà, máy như cũ (đơn hàng là nguồn xu ở nông trại).
+Chơi lại màn đã qua: nếu được nhiều sao hơn kỷ lục thì nhận phần chênh lệch theo bảng (vd. 1★ → 3★ ở màn thường: +60),
+còn lại nhận `REPLAY_COINS = 10`. Xu cũng vẫn dùng mua ruộng, chuồng, gà, máy như cũ.
 Thiếu xu ở mọi đường (mua booster, hồi sinh) → `FalconSDK.shop.open(where)`; shop tắt (dev) thì toast "Không đủ xu".
-`.falcon/sdk-config.json` giữ `winCoins` / `revivePrice` cùng giá trị cho lớp studio.
+`.falcon/sdk-config.json` giữ `revivePrice` cho lớp studio; `winCoins` ở đó không còn dùng vì thưởng giờ theo sao.
 
 ## Booster (300 xu mỗi cái, không tốn lượt)
 
-| Booster | Mở từ màn | Cách dùng |
+| Booster | Mở từ màn (tặng 1 cái + tutorial) | Cách dùng |
 |---|---|---|
-| **Xẻng vàng** (Golden Shovel) | 2 | Trang bị → chạm một cropsy hoặc vật cản: xúc bỏ hẳn (thùng 2 lớp cũng vỡ ngay) |
-| **Móng ngựa may mắn** (Lucky Horseshoe) | 5 | Chạm là dùng: +5 lượt |
-| **Quả Phù Thủy** (Witch Fruit) | 8 | Trang bị → chạm bất kỳ đâu (kể cả ô trống): xoá vùng 3×3, vật cản mất 1 lớp |
+| **Xẻng vàng** (Golden Shovel) | 5 | Trang bị → chạm một cropsy hoặc vật cản: xúc bỏ hẳn (thùng 2 lớp cũng vỡ ngay) |
+| **Móng ngựa may mắn** (Lucky Horseshoe) | 8 | Chạm là dùng: +5 lượt |
+| **Quả Phù Thủy** (Witch Fruit) | 10 | Trang bị → chạm bất kỳ đâu (kể cả ô trống): xoá vùng 3×3, vật cản mất 1 lớp |
 
 - Thanh booster ẩn trên bàn tutorial. Hết hàng → popup mua rồi tự dùng / trang bị. Bấm lại plate đang sáng để huỷ.
 - Khi dùng: `FalconSDK.analytics.turn.useBooster(key)` tại chỗ tiêu.
@@ -94,7 +119,8 @@ Thiếu xu ở mọi đường (mua booster, hồi sinh) → `FalconSDK.shop.ope
 | `?lang=vi` | UI tiếng Việt (mặc định theo ngôn ngữ app/trình duyệt) |
 | `?mock=1` | Giả lập bridge app của SDK |
 | `?data={"hp":{"wallet":{"coin":2000}}}` | (SDK) ghi đè user data lúc boot — tiện cấp xu để test booster/hồi sinh |
+| `?notips=1` | Tắt thẻ tutorial lần đầu trong màn Match (cho test tự động) |
 | `?debug=1` | `window.__hp` cho test tự động: `state/board/hint/moves/cell/tileAt`, `play` (bot đi 1 nước), `swap`, `arm/use/buy` (booster), `setMoves/nearWin` |
 
-Save nằm trong `userData.hp` (schema giống mục 11 của GDD, thêm `boosters: {shovel, moves, witch}`); `userData.coins` là bản sao ví xu
+Save nằm trong `userData.hp` (schema giống mục 11 của GDD, thêm `boosters: {shovel, moves, witch}` và `tips`: tutorial đã xem); `userData.coins` là bản sao ví xu
 cho header của lớp studio. Tutorial lưu `stepId`, thoát giữa chừng sẽ resume đúng bước.

@@ -463,6 +463,42 @@ const stripe = (rot: number): string => svg(100, 100, `<g transform="rotate(${ro
 export const STRIPE_ROW = stripe(0);
 export const STRIPE_COL = stripe(90);
 
+/** Hay Bale Cropsy (T / L shape): the cropsy bundled in a ring of straw, tied with red twine. */
+export const HAYBALE_WRAP = svg(100, 100, `
+<circle cx="50" cy="52" r="42" fill="none" stroke="#c9961f" stroke-width="15"/>
+<circle cx="50" cy="52" r="42" fill="none" stroke="#f3d775" stroke-width="10"/>
+<g stroke="#d8a93a" stroke-width="2" stroke-linecap="round">${Array.from({ length: 18 }, (_, i) => {
+  const a = (i / 18) * Math.PI * 2;
+  const x1 = 50 + Math.cos(a) * 37, y1 = 52 + Math.sin(a) * 37, x2 = 50 + Math.cos(a + 0.18) * 47, y2 = 52 + Math.sin(a + 0.18) * 47;
+  return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)}L${x2.toFixed(1)} ${y2.toFixed(1)}"/>`;
+}).join('')}</g>
+<path d="M50 6v14M50 84v14" stroke="#d63a2a" stroke-width="5"/>
+<path d="M50 10c-10-10-20-4-14 4 4 4 10 2 14-4zM50 10c10-10 20-4 14 4-4 4-10 2-14-4z" fill="#e8413c" stroke="#a52a2a" stroke-width="1.5"/>
+<circle cx="50" cy="10" r="3.5" fill="#a52a2a"/>`);
+
+/** Busy Bee (2×2 square): a cropsy carrying a little bee. Also the flying bee of the effect. */
+export const BEE = svg(64, 64, `
+<ellipse cx="22" cy="18" rx="12" ry="9" fill="#e8f6ff" stroke="#9cc8e8" stroke-width="2" transform="rotate(-20 22 18)" opacity=".95"/>
+<ellipse cx="40" cy="16" rx="12" ry="9" fill="#e8f6ff" stroke="#9cc8e8" stroke-width="2" transform="rotate(20 40 16)" opacity=".95"/>
+<ellipse cx="32" cy="38" rx="20" ry="16" fill="#ffd23a" stroke="#3b2a14" stroke-width="2.5"/>
+<path d="M24 24c-4 8-4 22 0 29M36 23c-3 9-3 22 0 30" stroke="#3b2a14" stroke-width="6" fill="none"/>
+<circle cx="46" cy="34" r="9" fill="#3b2a14"/><circle cx="48" cy="32" r="2.4" fill="#fff"/>
+<path d="M12 38l-8 2 8 2z" fill="#3b2a14"/>
+<path d="M48 26c2-6 6-8 9-7M44 25c0-6 2-9 5-10" stroke="#3b2a14" stroke-width="2" fill="none" stroke-linecap="round"/>`);
+export const BEE_BADGE = svg(100, 100, `<g transform="translate(46 2) scale(.82)">${BEE.replace(/^<svg[^>]*>|<\/svg>$/g, '')}</g>`);
+
+/** The beehive spawner sitting on the tray rim above a column. */
+export const ICON_BEEHIVE = svg(64, 64, `
+<path d="M32 4v6" stroke="#7a4a1f" stroke-width="4"/>
+<ellipse cx="32" cy="15" rx="12" ry="6" fill="#f2b81c" stroke="#b57a0a" stroke-width="2"/>
+<ellipse cx="32" cy="26" rx="18" ry="7" fill="#ffd23a" stroke="#b57a0a" stroke-width="2"/>
+<ellipse cx="32" cy="38" rx="22" ry="8" fill="#f2b81c" stroke="#b57a0a" stroke-width="2"/>
+<ellipse cx="32" cy="50" rx="18" ry="7" fill="#ffd23a" stroke="#b57a0a" stroke-width="2"/>
+<ellipse cx="32" cy="42" rx="5" ry="4" fill="#5a3512"/>`);
+
+/** The tutorial's pointing hand. */
+export const ICON_HAND = svg(64, 64, `<path d="M22 60c-8-6-14-16-14-24 0-4 4-6 8-2l4 6V12a5 5 0 0 1 10 0v18l2-2a5 5 0 0 1 8 2l2 2a5 5 0 0 1 8 2v16c0 6-6 10-10 10z" fill="#ffd9b3" stroke="#3b2a14" stroke-width="3" stroke-linejoin="round"/>`);
+
 export const ICON_TRACTOR = svg(72, 56, `
 <ellipse cx="36" cy="52" rx="30" ry="3.5" fill="#000" opacity=".18"/>
 <path d="M8 26h40l8 8v8H8z" fill="#e8413c"/><path d="M8 26h40l3 3H8z" fill="#ff6b5a"/>

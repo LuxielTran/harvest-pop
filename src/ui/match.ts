@@ -6,10 +6,10 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
-import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, starsFor, type BoosterConfig, type MatchLevelConfig } from '../config';
+import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, starsFor, type BoosterConfig, type MatchLevelConfig, type TutorialKey } from '../config';
 import { t } from '../i18n';
 import {
-  Board, goalFor, goalsDone, goalsProgress, makeGoals,
+  Board, goalFor, goalsDone, goalsProgress, makeGoals, scoreTurn, type Special,
   type Fall, type GoalProgress, type Hit, type Move, type Pos, type StepCtx, type StepResult, type Tile,
 } from '../match3';
 import * as St from '../state';
@@ -31,7 +31,7 @@ interface View { tile: Tile; x: number; y: number; s: number; a: number; }
 interface Tween { obj: View; prop: 'x' | 'y' | 's' | 'a'; from: number; to: number; t: number; dur: number; ease: (x: number) => number; resolve?: () => void; }
 interface Mover { view: View; pts: { x: number; y: number }[]; t: number; dur: number; resolve: () => void; }
 interface Flyer { key: string; x: number; y: number; tx: number; ty: number; t: number; }
-interface Fx { kind: 'shovel' | 'witch' | 'row' | 'col' | 'cross' | 'rainbow' | 'puff' | 'sparkle'; x: number; y: number; t: number; dur: number; targets?: { x: number; y: number }[]; }
+interface Fx { kind: 'shovel' | 'witch' | 'row' | 'col' | 'cross' | 'rainbow' | 'puff' | 'sparkle' | 'wrap' | 'bee'; x: number; y: number; t: number; dur: number; targets?: { x: number; y: number }[]; size?: number; }
 
 const easeOut = (x: number): number => 1 - (1 - x) * (1 - x);
 const easeInOut = (x: number): number => (x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2);
@@ -42,6 +42,7 @@ const SPRITES: Record<string, string> = {
   ...A.TILE_ART, rainbow: A.RAINBOW_SEED, chick: A.CHICK_TILE, piglet: A.PIGLET_TILE,
   stripe_row: A.STRIPE_ROW, stripe_col: A.STRIPE_COL, mud: A.MUD_TILE, crate2: A.CRATE_TILE, crate1: A.CRATE_CRACKED,
   soil: A.SOIL_TILE, soilicon: A.ICON_SOIL, tractor: A.ICON_TRACTOR, shovel: A.ICON_SHOVEL, witch: A.ICON_WITCH, basket: A.ICON_BASKET,
+  haybale: A.HAYBALE_WRAP, beebadge: A.BEE_BADGE, bee: A.BEE, hive: A.ICON_BEEHIVE, hand: A.ICON_HAND,
 };
 
 let root: HTMLElement | null = null;
@@ -173,8 +174,13 @@ export function openMatch(index: number, callbacks: MatchCallbacks, opts: { tuto
   lvl.innerHTML = `${t('lvl')} ${cfg.id}${hard ? ` <em class="diff ${cfg.difficulty}">${t(`diff_${cfg.difficulty}`)}</em>` : ''}`;
   buildGoalChips();
   introText = !tutorialMode && cfg.intro ? t(cfg.intro) : '';
-  const fresh = !tutorialMode ? BOOSTERS.find((b) => b.unlock === cfg.id) : undefined;
-  if (fresh) toast(t('booster_new', { name: t(`booster_${fresh.key}`) }));
+  closeTipCard();
+  guide = null;
+  pendingTips = tutorialMode || NO_TIPS ? [] : (cfg.tutorial ?? []).filter((k) => !St.tipSeen(k));
+  if (pendingTips.length) {
+    const b = board;
+    setTimeout(() => { if (board === b && !over) showNextTip(); }, 800);
+  }
   hudSig = '';
   updateHud();
   renderBoosterBar();
@@ -295,10 +301,212 @@ function renderBoosterBar(): void {
       row.appendChild(plate);
     }
   }
-  const text = armed ? t(`booster_tip_${armed.key}`) : introText;
+  for (const p of row.querySelectorAll<HTMLElement>('.bplate')) {
+    const on = !!guide?.plate && p.dataset.key === guide.plate && !armed;
+    p.classList.toggle('guide', on);
+    if (on) p.insertAdjacentHTML('beforeend', `<img class="ghand" src="${A.svgUrl(A.ICON_HAND)}" alt="">`);
+  }
+  const text = guide?.text || (armed ? t(`booster_tip_${armed.key}`) : introText);
   tip.style.display = text ? '' : 'none';
-  tip.classList.toggle('intro', !armed);
+  tip.classList.toggle('intro', !armed || !!guide);
+  tip.classList.toggle('guide', !!guide);
   tip.textContent = text;
+}
+
+// ---------------------------------------------------------------------------
+// First-time tutorials: a card that explains, then a guided first use on the board.
+
+const NO_TIPS = new URLSearchParams(location.search).has('notips');
+const BOOSTER_TIPS: TutorialKey[] = ['shovel', 'moves', 'witch'];
+const POWER_TIPS: Partial<Record<TutorialKey, Special[]>> = { tractor: ['row', 'col'], haybale: ['wrap'], bee: ['bee'], rainbow: ['rainbow'] };
+
+interface Guide {
+  key: TutorialKey;
+  text: string;
+  /** A swap to show with the hand. */
+  move?: Move | null;
+  /** Cells to ring (the obstacles, or the power-up to use). */
+  cells?: Pos[];
+  /** A booster button to point at. */
+  plate?: string;
+  /** Where to use the armed booster. */
+  target?: Pos | null;
+  /** The power-up this guide teaches, and whether one has been made yet. */
+  follow?: Special[];
+  made?: boolean;
+}
+let guide: Guide | null = null;
+let pendingTips: TutorialKey[] = [];
+let cardOpen = false;
+
+const sp = (key: string, cls = ''): string => `<img src="${A.svgUrl(SPRITES[key])}" class="${cls}" alt="">`;
+function tileHtml(kind: string, special?: Special): string {
+  if (special === 'rainbow') return `<span class="tc-tile">${sp('rainbow')}</span>`;
+  const over = special === 'row' ? sp('stripe_row') : special === 'col' ? sp('stripe_col') : special === 'wrap' ? sp('haybale') : special === 'bee' ? sp('beebadge') : '';
+  return `<span class="tc-tile">${sp(kind)}${over}</span>`;
+}
+function mini(pattern: string[], kind: string): string {
+  const cells = pattern.join('').split('').map((ch) => (ch === 'x' ? sp(kind) : '<i></i>')).join('');
+  return `<span class="tc-mini" style="grid-template-columns:repeat(${pattern[0].length},22px)">${cells}</span>`;
+}
+const ARROW = '<b class="tc-arrow">➜</b>';
+function illustration(key: TutorialKey): string {
+  switch (key) {
+    case 'tractor': return mini(['xxxx'], 'carrot') + ARROW + tileHtml('carrot', 'row');
+    case 'haybale': return mini(['xxx', '.x.', '.x.'], 'apple') + ARROW + tileHtml('apple', 'wrap');
+    case 'bee': return mini(['xx', 'xx'], 'corn') + ARROW + tileHtml('corn', 'bee') + `<span class="tc-tile">${sp('hive')}</span>`;
+    case 'rainbow': return mini(['xxxxx'], 'berry') + ARROW + tileHtml('', 'rainbow');
+    case 'mud': return `<span class="tc-tile">${sp('mud')}</span>${ARROW}<b class="tc-arrow">✓</b>`;
+    case 'crate': return `<span class="tc-tile">${sp('crate2')}</span>${ARROW}<span class="tc-tile">${sp('crate1')}</span>${ARROW}<b class="tc-arrow">✓</b>`;
+    case 'soil': return `<span class="tc-tile">${sp('soil')}</span>${ARROW}<span class="tc-tile">${sp('soilicon')}</span>`;
+    case 'soilcrate': return `<span class="tc-tile">${sp('crate2')}</span>${ARROW}<span class="tc-tile">${sp('soil')}</span>`;
+    case 'chick': case 'piglet': return `<span class="tc-tile">${sp(key)}</span><b class="tc-arrow">⬇</b>`;
+    case 'any': return `<span class="tc-tile">${sp('basket')}</span>`;
+    default: return `<img class="tc-big" src="${A.svgUrl(A.ITEM_ICON[key])}" alt="">`;
+  }
+}
+
+function closeTipCard(): void {
+  root?.querySelector('.tcard-wrap')?.remove();
+  cardOpen = false;
+}
+
+function showNextTip(): void {
+  const key = pendingTips.shift();
+  if (!key || !root) return;
+  cardOpen = true;
+  hint = null;
+  const free = BOOSTER_TIPS.includes(key) ? `<div class="tc-free">${t('tut_free')}</div>` : '';
+  const card = el(`<div class="tcard-wrap"><div class="tcard"><div class="tc-head">${t(`tut_${key}_title`)}</div>
+    <div class="tc-illus">${illustration(key)}</div><p>${t(`tut_${key}_text`)}</p>${free}
+    <button class="btn green">${t('got_it')}</button></div></div>`);
+  card.querySelector('button')!.addEventListener('click', () => {
+    closeTipCard();
+    St.markTip(key);
+    startGuide(key);
+    if (pendingTips.length) showNextTip();
+  });
+  root.appendChild(card);
+}
+
+/** A swap that makes one of `specials` on its first step, judged on a copy of the board. */
+function findCreatingMove(specials: Special[]): Move | null {
+  if (!board) return null;
+  for (const m of board.legalMoves()) {
+    const b = board.clone();
+    const res = b.step(b.beginSwap(m.a, m.b));
+    if (res?.created.some((c) => specials.includes(c.tile.special))) return m;
+  }
+  return null;
+}
+
+/**
+ * Shapes a taught power-up needs: the cells it fills after the swap, the hole in
+ * them, and the cropsy that slides into the hole (offsets from an anchor cell).
+ */
+const DEMO: Partial<Record<TutorialKey, { shape: [number, number][]; hole: [number, number]; mover: [number, number] }>> = {
+  tractor: { shape: [[0, 0], [0, 1], [0, 2], [0, 3]], hole: [0, 2], mover: [1, 2] },
+  rainbow: { shape: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]], hole: [0, 2], mover: [1, 2] },
+  haybale: { shape: [[0, 0], [0, 1], [0, 2], [1, 1], [2, 1]], hole: [0, 1], mover: [-1, 1] },
+  bee: { shape: [[0, 0], [0, 1], [1, 0], [1, 1]], hole: [0, 1], mover: [0, 2] },
+};
+
+/** No swap makes the taught power-up yet: recolour a few cropsies so one does (the tutorial's scripted board). */
+function plantDemo(key: TutorialKey): Move | null {
+  const b = board;
+  const demo = DEMO[key];
+  if (!b || !demo) return null;
+  const plain = (r: number, c: number): boolean => { const t = b.at(r, c); return !!t && !t.animal && !t.special; };
+  const anchors: Pos[] = [];
+  for (let r = 1; r < b.rows - 1; r++) for (let c = 0; c < b.cols; c++) anchors.push({ r, c });
+  anchors.sort((p, q) => Math.abs(p.r - b.rows / 2) + Math.abs(p.c - b.cols / 2) - (Math.abs(q.r - b.rows / 2) + Math.abs(q.c - b.cols / 2)));
+  for (const at of anchors) {
+    const cell = ([dr, dc]: [number, number]): Pos => ({ r: at.r + dr, c: at.c + dc });
+    const fill = [...demo.shape.filter(([dr, dc]) => dr !== demo.hole[0] || dc !== demo.hole[1]), demo.mover].map(cell);
+    const hole = cell(demo.hole);
+    if (![...fill, hole].every((p) => plain(p.r, p.c))) continue;
+    for (const kind of b.kinds) {
+      if (b.grid[hole.r][hole.c]!.kind === kind) continue;
+      const saved = fill.map((p) => b.grid[p.r][p.c]!);
+      fill.forEach((p, i) => { b.grid[p.r][p.c] = { ...saved[i], kind }; });
+      const mover = cell(demo.mover);
+      const ok = !b.hasMatches() && b.validSwap(mover, hole);
+      const check = b.clone();
+      const made = ok && check.step(check.beginSwap(mover, hole))?.created.some((c) => POWER_TIPS[key]!.includes(c.tile.special));
+      if (made) {
+        for (const p of fill) { const v = views.get(b.grid[p.r][p.c]!.id); if (v) v.tile = b.grid[p.r][p.c]!; }
+        return { a: mover, b: hole };
+      }
+      fill.forEach((p, i) => { b.grid[p.r][p.c] = saved[i]; });
+    }
+  }
+  return null;
+}
+
+function cellsOf(test: (r: number, c: number) => boolean): Pos[] {
+  const out: Pos[] = [];
+  if (!board) return out;
+  for (let r = 0; r < board.rows; r++) for (let c = 0; c < board.cols; c++) if (board.mask[r][c] && test(r, c)) out.push({ r, c });
+  return out;
+}
+
+function startGuide(key: TutorialKey): void {
+  if (!board) return;
+  const b = board;
+  if (BOOSTER_TIPS.includes(key)) {
+    St.grantBooster(key);
+    guide = { key, text: t(`tut_${key}_do`), plate: key };
+  } else if (POWER_TIPS[key]) {
+    const move = findCreatingMove(POWER_TIPS[key]!) ?? plantDemo(key);
+    guide = { key, text: move ? t(`tut_${key}_do`) : '', move, follow: POWER_TIPS[key] };
+  } else {
+    const cells = key === 'mud' ? cellsOf((r, c) => b.block[r][c]?.type === 'mud')
+      : key === 'crate' || key === 'soilcrate' ? cellsOf((r, c) => b.block[r][c]?.type === 'crate')
+      : key === 'soil' ? cellsOf((r, c) => b.soil[r][c])
+      : key === 'chick' || key === 'piglet' ? cellsOf((r, c) => !!b.grid[r][c]?.animal) : [];
+    guide = { key, text: t(`tut_${key}_do`), cells, move: b.bestMove(goals) };
+  }
+  renderBoosterBar();
+}
+
+/** Move the guide on after a turn: a taught power-up gets its "now use it" step. */
+function advanceGuide(): void {
+  if (!guide || !board) return;
+  if (guide.plate || guide.target !== undefined) return;
+  if (!guide.follow) { guide = null; renderBoosterBar(); return; }
+  const mine = cellsOf((r, c) => guide!.follow!.includes(board!.grid[r][c]?.special ?? null) && !board!.block[r][c]);
+  if (mine.length) {
+    guide.made = true;
+    guide.move = null;
+    guide.cells = mine.slice(0, 1);
+    guide.text = t(`tut_${guide.key}_use`);
+  } else if (guide.made) {
+    guide = null;
+  } else {
+    guide.move = findCreatingMove(guide.follow);
+    guide.text = guide.move ? t(`tut_${guide.key}_do`) : '';
+    if (!guide.move) guide = null;
+  }
+  renderBoosterBar();
+}
+
+/** The best spot for a target booster, judged like the hint. */
+function bestTarget(key: string): Pos | null {
+  if (!board) return null;
+  let best: Pos | null = null, bestScore = 0;
+  for (let r = 0; r < board.rows; r++) for (let c = 0; c < board.cols; c++) {
+    const hits: Hit[] = [];
+    if (key === 'shovel') {
+      const tl = board.grid[r][c];
+      if (!board.mask[r][c] || (!board.block[r][c] && (!tl || tl.animal))) continue;
+      hits.push({ pos: { r, c }, power: 'all' });
+    } else for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) hits.push({ pos: { r: r + dr, c: c + dc } });
+    const cl = board.clone();
+    const out = cl.resolveAll({ hits });
+    const s = scoreTurn(cl, goals, out.steps, out.animals);
+    if (s > bestScore) { bestScore = s; best = { r, c }; }
+  }
+  return best;
 }
 
 function setArmed(a: { key: string; external: boolean } | null): void {
@@ -313,17 +521,28 @@ export function armBooster(key: string, external = false): boolean {
   if (!board || over || locked || paused || !def) return false;
   if (def.use === 'instant') return addMovesBooster(external);
   if (!external && St.boosterCount(key) <= 0) return false;
+  if (guide?.plate === key) {
+    // Booster tutorial, step 2: point at the best spot to use it.
+    guide.plate = undefined;
+    guide.target = bestTarget(key);
+    guide.text = t(`tut_${key}_tap`);
+  }
   setArmed({ key, external });
   return true;
 }
 export function isBoosterArmed(key: string): boolean { return armed?.key === key; }
-export function cancelBooster(): void { if (armed) setArmed(null); }
+export function cancelBooster(): void {
+  if (!armed) return;
+  if (guide && guide.target !== undefined && guide.key === armed.key) { guide.plate = armed.key; guide.target = undefined; guide.text = t(`tut_${guide.key}_do`); }
+  setArmed(null);
+}
 
 /** Lucky Horseshoe: +5 moves, right away. */
 export function addMovesBooster(external = false): boolean {
   if (!board || over || locked || paused) return false;
   if (!external && !St.useBooster('moves')) return false;
   moves += EXTRA_MOVES;
+  if (guide?.key === 'moves') guide = null;
   if (FalconSDK.analytics.turn.isActive()) FalconSDK.analytics.turn.useBooster('moves');
   toast(t('moves_added', { n: EXTRA_MOVES }));
   updateHud();
@@ -332,7 +551,7 @@ export function addMovesBooster(external = false): boolean {
 }
 
 function tapPlate(b: BoosterConfig): void {
-  if (locked || over || paused) return;
+  if (locked || over || paused || cardOpen) return;
   if (armed?.key === b.key) { cancelBooster(); return; }
   if (St.boosterCount(b.key) > 0) armBooster(b.key);
   else openBoosterBuy(b);
@@ -384,6 +603,7 @@ async function useArmedAt(pos: Pos): Promise<void> {
   if (board !== b) return;
   shakeT = 0.15;
   await runResolve({ hits });
+  if (guide && guide.target !== undefined) { guide = null; renderBoosterBar(); }
   afterTurn();
 }
 
@@ -393,7 +613,7 @@ async function useArmedAt(pos: Pos): Promise<void> {
 let drag: { pos: Pos; x: number; y: number } | null = null;
 
 function onDown(e: PointerEvent): void {
-  if (locked || over || paused || !board) return;
+  if (locked || over || paused || !board || cardOpen) return;
   const p = toStage(e.clientX, e.clientY);
   const pos = cellAt(p.x, p.y);
   if (!pos) return;
@@ -461,6 +681,7 @@ function afterTurn(): void {
   if (goalsDone(goals)) { finish(true); return; }
   if (moves <= 0) { finish(false); return; }
   ensureMoves();
+  advanceGuide();
   locked = false;
   idleSince = performance.now();
 }
@@ -493,10 +714,22 @@ function fly(key: string, from: { x: number; y: number }, goal: GoalProgress): v
 async function animateStep(res: StepResult): Promise<void> {
   for (const bl of res.blasts) {
     const at = { x: cx(bl.pos.c), y: cy(bl.pos.r) };
-    if (bl.type === 'rainbow') fxs.push({ kind: 'rainbow', ...at, t: 0, dur: 520, targets: (bl.targets ?? []).map((p) => ({ x: cx(p.c), y: cy(p.r) })) });
-    else fxs.push({ kind: bl.type, ...at, t: 0, dur: 480 });
+    const targets = (bl.targets ?? []).map((p) => ({ x: cx(p.c), y: cy(p.r) }));
+    if (bl.type === 'rainbow') fxs.push({ kind: 'rainbow', ...at, t: 0, dur: 520, targets });
+    else if (bl.type === 'bee') fxs.push({ kind: 'bee', ...at, t: 0, dur: 620, targets });
+    else if (bl.type === 'wrap' || bl.type === 'bigwrap') fxs.push({ kind: 'wrap', ...at, t: 0, dur: 520, size: bl.type === 'wrap' ? 3 : 5 });
+    else if (bl.type === 'bigcross') {
+      for (const d of [-1, 0, 1]) {
+        fxs.push({ kind: 'row', x: at.x, y: at.y + d * CELL, t: 0, dur: 480 });
+        fxs.push({ kind: 'col', x: at.x + d * CELL, y: at.y, t: 0, dur: 480 });
+      }
+    } else fxs.push({ kind: bl.type, ...at, t: 0, dur: 480 });
   }
-  if (res.blasts.length) { shakeT = Math.max(shakeT, 0.12); await wait(140); }
+  if (res.blasts.length) {
+    shakeT = Math.max(shakeT, 0.12);
+    // Bees need a moment to reach their targets.
+    await wait(res.blasts.some((b) => b.type === 'bee') ? 420 : 140);
+  }
   for (const cr of res.created) {
     views.delete(cr.from.id);
     const v: View = { tile: cr.tile, x: cx(cr.pos.c), y: cy(cr.pos.r), s: 0.4, a: 1 };
@@ -652,7 +885,7 @@ function frame(ts: number): void {
   flyers = flyers.filter((f) => f.t < 1);
   for (const f of fxs) f.t += (dt * 1000) / f.dur;
   fxs = fxs.filter((f) => f.t < 1);
-  if (!locked && !over && !hint && !armed && performance.now() - idleSince > hintDelay) showHint();
+  if (!locked && !over && !hint && !armed && !cardOpen && !guide?.move && performance.now() - idleSince > hintDelay) showHint();
   draw();
 }
 
@@ -713,6 +946,12 @@ function draw(): void {
   shade.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = shade;
   for (let c = 0; c < b.cols; c++) if (b.mask[0][c]) g.fillRect(BX + c * CELL, BY, CELL, 14);
+  // Beehives on the rim above their columns.
+  for (const s of b.spawners) {
+    if (!b.hives.has(s.c)) continue;
+    const k = CELL * 0.62;
+    g.drawImage(sprite('hive'), cx(s.c) - k / 2, BY + s.r * CELL - k * 0.82 + Math.sin(clock * 3 + s.c) * 1.2, k, k);
+  }
   // Exits for animals: green arrows under the bottom row.
   if (b.animalKind) {
     g.fillStyle = '#3fa63a';
@@ -757,6 +996,7 @@ function draw(): void {
   for (const v of fading) drawTile(g, v.tile, v.x, v.y, v.s, v.a);
   g.restore();
   drawFx(g);
+  drawGuide(g);
   g.restore();
   // Flyers to the goal chips
   for (const f of flyers) {
@@ -765,6 +1005,30 @@ function draw(): void {
     const y = f.y + (f.ty - f.y) * k - Math.sin(k * Math.PI) * 60;
     const size = (CELL - PAD * 2) * (1 - k * 0.45);
     g.drawImage(sprite(f.key), x - size / 2, y - size / 2, size, size);
+  }
+}
+
+/** The tutorial guide: green rings on cells, and a hand showing the swap or the spot. */
+function drawGuide(g: CanvasRenderingContext2D): void {
+  if (!guide || cardOpen || over) return;
+  const pulse = 3 + Math.sin(clock * 7) * 1.5;
+  const ring = (p: Pos): void => {
+    g.strokeStyle = '#5cff6a';
+    g.lineWidth = pulse;
+    roundRect(g, BX + p.c * CELL + 2, BY + p.r * CELL + 2, CELL - 4, CELL - 4, 10);
+    g.stroke();
+  };
+  for (const p of guide.cells ?? []) ring(p);
+  const hand = (x: number, y: number): void => { const s = CELL * 0.95; g.drawImage(sprite('hand'), x - s * 0.3, y - s * 0.05, s, s); };
+  if (guide.move && !locked) {
+    ring(guide.move.a);
+    ring(guide.move.b);
+    const k = (Math.sin(clock * 3) + 1) / 2;
+    hand(cx(guide.move.a.c) + (cx(guide.move.b.c) - cx(guide.move.a.c)) * k, cy(guide.move.a.r) + (cy(guide.move.b.r) - cy(guide.move.a.r)) * k);
+  }
+  if (guide.target && armed) {
+    ring(guide.target);
+    hand(cx(guide.target.c), cy(guide.target.r) + Math.sin(clock * 6) * 4);
   }
 }
 
@@ -805,6 +1069,39 @@ function drawFx(g: CanvasRenderingContext2D): void {
         g.stroke();
       });
       g.restore();
+    } else if (f.kind === 'wrap') {
+      // The hay bale bursts: a golden square shock and flying straw.
+      const half = (CELL * (f.size ?? 3)) / 2;
+      g.save();
+      g.globalAlpha = fade;
+      g.fillStyle = 'rgba(255,214,90,.35)';
+      g.fillRect(f.x - half, f.y - half, half * 2, half * 2);
+      g.strokeStyle = '#f3c54a';
+      g.lineWidth = 4;
+      g.strokeRect(f.x - half * (0.4 + k * 0.6), f.y - half * (0.4 + k * 0.6), half * 2 * (0.4 + k * 0.6), half * 2 * (0.4 + k * 0.6));
+      g.strokeStyle = '#c9961f';
+      g.lineWidth = 2.5;
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2 + 0.3;
+        const r0 = half * 0.3 + half * 0.9 * k;
+        g.beginPath();
+        g.moveTo(f.x + Math.cos(a) * r0, f.y + Math.sin(a) * r0);
+        g.lineTo(f.x + Math.cos(a + 0.25) * (r0 + 9), f.y + Math.sin(a + 0.25) * (r0 + 9));
+        g.stroke();
+      }
+      g.restore();
+    } else if (f.kind === 'bee') {
+      // Busy Bees fly out on wobbly paths to their targets.
+      const s = CELL * 0.8;
+      (f.targets ?? []).forEach((p, i) => {
+        const e = easeInOut(Math.min(1, k * 1.25));
+        const wob = Math.sin(e * Math.PI * 3 + i) * 14 * (1 - e);
+        const x = f.x + (p.x - f.x) * e + wob, y = f.y + (p.y - f.y) * e - Math.sin(e * Math.PI) * 30;
+        g.save();
+        g.globalAlpha = k > 0.85 ? (1 - k) / 0.15 : 1;
+        g.drawImage(sprite('bee'), x - s / 2, y - s / 2, s, s);
+        g.restore();
+      });
     } else if (f.kind === 'witch') {
       g.save();
       if (k < 0.4) {
@@ -875,6 +1172,11 @@ function drawTile(g: CanvasRenderingContext2D, tile: Tile, x: number, y: number,
   if (tile.special === 'row' || tile.special === 'col') {
     g.globalAlpha = a * (0.85 + Math.sin(clock * 6) * 0.15);
     g.drawImage(sprite(tile.special === 'row' ? 'stripe_row' : 'stripe_col'), x - size / 2, y - size / 2 - 2, size, size);
+  } else if (tile.special === 'wrap') {
+    const k = size * (1.08 + Math.sin(clock * 5) * 0.03);
+    g.drawImage(sprite('haybale'), x - k / 2, y - k / 2 - 2, k, k);
+  } else if (tile.special === 'bee') {
+    g.drawImage(sprite('beebadge'), x - size / 2 + Math.sin(clock * 9) * 1.5, y - size / 2 - 2 + Math.cos(clock * 11) * 1.5, size, size);
   }
   g.globalAlpha = 1;
 }
