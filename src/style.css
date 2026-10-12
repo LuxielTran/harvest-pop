@@ -361,3 +361,29 @@ img { pointer-events: none; display: block; }
 .switch button::after { content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: left .15s; }
 .switch button.on { background: var(--green); }
 .switch button.on::after { left: 29px; }
+
+/* ---------- Match: goals, difficulty tags, low moves ---------- */
+.mhud .goalbox { align-items: stretch; }
+.goals { display: flex; gap: 6px; }
+.gchip { display: flex; align-items: center; gap: 3px; background: rgba(40,28,12,.78); border-radius: 14px; padding: 4px 9px 4px 4px; color: #fff; font-weight: 900; font-size: 18px; box-shadow: 0 3px 0 rgba(0,0,0,.25); }
+.gchip img { width: 34px; height: 34px; }
+.gchip.done { background: #3b8f2e; }
+.gbox.stars { padding: 4px 8px; }
+.gbox.stars .starrow { gap: 2px; align-items: center; }
+.gbox.stars .starrow img { width: 24px; height: 24px; transform: none; }
+.gbox.stars .starrow img:nth-child(2) { width: 30px; height: 30px; margin-top: -4px; }
+.mhud .goalbox { gap: 6px; padding: 0 2px; }
+.goals.result { justify-content: center; }
+.goals.result .gchip { color: #fff; }
+.mhud .pill.low { background: #d63a3a; animation: armed 1s infinite ease-in-out; }
+.diff { font-style: normal; font-size: 12px; font-weight: 900; color: #fff; padding: 2px 8px; border-radius: 10px; vertical-align: middle; text-shadow: none; }
+.diff.hard { background: #8e3fd6; }
+.diff.superhard { background: #d63a3a; }
+.diff.boss { background: linear-gradient(90deg, #d63a3a, #8e3fd6); }
+.btip.intro { border-color: #3b8f2e; box-shadow: 0 4px 0 #2f7f22; max-width: 360px; text-align: center; white-space: normal; }
+.btip.intro::after { display: none; }
+.lvlbtn { position: relative; }
+.lvlbtn .diff { position: absolute; top: -7px; right: 6px; font-size: 10px; padding: 1px 6px; }
+.lvlbtn.hard { box-shadow: 0 0 0 3px #8e3fd6, 0 3px 0 rgba(0,0,0,.12); }
+.lvlbtn.superhard, .lvlbtn.boss { box-shadow: 0 0 0 3px #d63a3a, 0 3px 0 rgba(0,0,0,.12); }
+.lvlbtn .g img { width: 18px; height: 18px; }
