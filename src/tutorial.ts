@@ -1,9 +1,17 @@
-// TutorialDirector: the forced T00→T12 walkthrough of the GDD. Steps are
-// derived from the save (so leaving and resuming lands on the same step),
-// actions outside the step are refused, and the highlighted target is the
-// first matching `[data-tut]` element on screen.
+// TutorialDirector: the forced walkthrough. Steps are derived from the save (so
+// leaving and resuming lands on the same step), actions outside the step are
+// refused, and the highlighted target is the first matching `[data-tut]`
+// element on screen.
+//
+// Level 1: sow 6 wheat → reap until the silo is full → Match-3 for stars → buy
+// the silo upgrade materials → upgrade the silo. That reaches farm level 2 (the
+// level-up popup lists corn, coop, chicken, egg, feed mill, bakery), then:
+// buy & place a coop → buy 3 chickens → buy & place a feed mill → make chicken
+// feed → sweep the feed over the chickens → sweep the basket over them for eggs
+// → buy & place a bakery → bake bread → collect it.
 
-import { S, count, isTutorialStep, onChange, onEvent, refillOrders, setTutorialStep, tutorialActive, tutorialGrantFeed, grantTutorialBonusStars } from './state';
+import { COOP_CAPACITY, TUTORIAL_CHICKENS } from './config';
+import { S, count, free, isTutorialStep, machineJobs, onChange, refillOrders, setTutorialStep, tutorialActive, tutorialGrantLevel, tutorialGrantSeeds, grantTutorialBonusStars } from './state';
 import { t } from './i18n';
 import { el, stage, toStage } from './ui/common';
 
@@ -23,129 +31,173 @@ interface StepDef {
   top?: boolean;
 }
 
-const ALWAYS = ['close', 'openInventory', 'openSettings', 'toggleSetting', 'openBarn', 'openSilo'];
+const ALWAYS = ['close', 'openInventory', 'openSettings', 'toggleSetting', 'openBarn', 'openSilo', 'move'];
+
+const plotKey = (status: string): string[] => {
+  const i = S.farm.plots.findIndex((p) => p.status === status);
+  return i < 0 ? [] : [`plot${i}`];
+};
+const chickKey = (status: string): string[] => {
+  const i = S.farm.chickens.findIndex((c) => c.status === status);
+  return i < 0 ? [] : [`chick${i}`];
+};
+const canSow = (): boolean => count('wheat') > 0 && S.farm.plots.some((p) => p.status === 'empty');
+/** While a bought building is being placed, its ✓ is the target. */
+const PLACE = 'place:ok';
+const siloBlocked = (): boolean => S.farm.plots.some((p) => p.status === 'ready') && free('silo') < 2;
+
+/** Targets for making something in a machine: drop the product in, wait, collect. */
+function machineTargets(id: string, tut: string, rid: string): string[] {
+  const j = machineJobs(id);
+  if (j.done.length) return [tut];
+  if (j.running) return [];
+  return [`prod:${rid}`, tut];
+}
+function machineText(id: string, make: string, wait: string, collect: string): string {
+  const j = machineJobs(id);
+  return t(j.done.length ? collect : j.running ? wait : make);
+}
 
 const STEPS: Record<string, StepDef> = {
-  T01: {
-    allows: ['buyPlot:0'],
-    targets: () => ['plot0'],
-    text: () => t('tut_T01'),
-    done: () => S.farm.plots[0].status !== 'locked',
-  },
-  T02: {
-    allows: ['openPlot:0', 'plant:0'],
-    targets: () => (S.farm.plots[0].status === 'empty' ? ['plant:wheat', 'plot0'] : []),
-    text: () => (S.farm.plots[0].status === 'growing' ? t('tut_T02_wait') : t('tut_T02')),
-    done: () => S.farm.plots[0].status === 'ready',
-  },
-  T03: {
-    allows: ['harvest:0', 'openPlot:0'],
-    targets: () => ['plot0'],
-    text: () => t('tut_T03'),
-    done: () => S.farm.plots[0].status === 'empty' && count('wheat') >= 2,
-  },
-  T04: {
-    allows: ['openShop', 'buy:coop'],
-    targets: () => ['shop:coop', 'shop'],
-    text: () => t('tut_T04'),
-    done: () => S.farm.coopBuilt,
-  },
-  T05: {
-    allows: ['openCoop', 'buyChicken'],
-    targets: () => ['coop:buy', 'coop'],
-    text: () => t('tut_T05'),
-    done: () => S.farm.chickens.length >= 1,
-  },
-  T06: {
-    allows: ['openMachine:feedmill', 'startRecipe:feedmill', 'collectOutput:feedmill'],
-    targets: () => {
-      const m = S.farm.machines.feedmill;
-      if (m.status === 'idle') return ['mill:craft', 'mill'];
-      if (m.status === 'output') return ['mill:collect', 'mill'];
-      return [];
-    },
-    text: () => {
-      const m = S.farm.machines.feedmill;
-      return m.status === 'processing' ? t('tut_T06_wait') : m.status === 'output' ? t('tut_T06_collect') : t('tut_T06');
-    },
-    done: () => S.farm.machines.feedmill.status === 'idle' && count('feed') >= 4,
-  },
-  T07: {
-    allows: ['openChicken:0', 'feed:0', 'collectEgg:0', 'openCoop'],
-    targets: () => {
-      const c = S.farm.chickens[0];
-      if (!c) return [];
-      if (c.status === 'hungry') return ['chicken:feed', 'chicken0'];
-      if (c.status === 'ready') return ['chicken:collect', 'chicken0'];
-      return [];
-    },
-    text: () => {
-      const c = S.farm.chickens[0];
-      return c?.status === 'producing' ? t('tut_T07_wait') : c?.status === 'ready' ? t('tut_T07_collect') : t('tut_T07');
-    },
-    // Resume-safe: the step also ends when the eggs are ready and the barn cannot take them.
-    done: () => blockedOnce,
-  },
-  T08: {
-    allows: ['openMatch', 'openChicken:0', 'collectEgg:0'],
-    targets: () => ['match'],
-    text: () => t('tut_T08'),
-    done: () => matchEntered,
-    onEnter: () => tutorialGrantFeed(),
+  // Sow all six fields: tap a field, then drag the wheat from the tray across them.
+  SOW: {
+    allows: ['openPlot', 'plant'],
+    targets: () => (canSow() ? ['seed:wheat', ...plotKey('empty')] : []),
+    text: () => (canSow() ? t('tut_sow') : t('tut_grow_wait')),
+    done: () => count('wheat') === 0 && S.farm.plots.every((p) => p.status !== 'empty'),
+    onEnter: () => tutorialGrantSeeds(),
     top: true,
   },
-  T09: {
+  // Reap with the sickle until the silo cannot take the next field (6 fields × 2 = 12 > 10 slots).
+  REAP: {
+    allows: ['openPlot', 'harvest'],
+    targets: () => ['sickle', ...plotKey('ready')],
+    text: () => (S.farm.plots.some((p) => p.status === 'ready') ? t('tut_reap') : t('tut_grow_wait')),
+    done: () => siloBlocked() || S.storage.silo.tier >= 2,
+    top: true,
+  },
+  MATCH: {
+    allows: ['openMatch'],
+    targets: () => ['match'],
+    text: () => t('tut_silo_full'),
+    done: () => matchEntered || S.wallet.star >= 2 || S.storage.silo.tier >= 2,
+  },
+  PLAY: {
     allows: ['openMatch', 'match'],
     targets: () => [],
-    text: () => t('tut_T09'),
-    done: () => matchWon,
+    text: () => t('tut_play'),
+    done: () => matchWon || S.wallet.star >= 2 || S.storage.silo.tier >= 2,
     top: true,
   },
-  T10: {
-    allows: ['openUpgrades', 'buyMaterial:nail', 'buyMaterial:screw'],
-    targets: () => (count('nail') < 1 ? ['upgrades:nail', 'upgrades'] : ['upgrades:screw', 'upgrades']),
-    text: () => (count('nail') >= 1 ? t('tut_T10_screw') : t('tut_T10')),
-    done: () => count('nail') >= 1 && count('screw') >= 1,
+  MATS: {
+    allows: ['openUpgrades', 'buyMaterial:bolt', 'buyMaterial:tape'],
+    targets: () => (count('bolt') < 1 ? ['upgrades:bolt', 'upgrades'] : ['upgrades:tape', 'upgrades']),
+    text: () => (count('bolt') >= 1 ? t('tut_mats_tape') : t('tut_mats')),
+    done: () => (count('bolt') >= 1 && count('tape') >= 1) || S.storage.silo.tier >= 2,
     top: true,
   },
-  T11: {
-    allows: ['openBarn', 'upgrade:barn'],
-    targets: () => ['barn:upgrade', 'barn'],
-    text: () => t('tut_T11'),
-    done: () => S.storage.barn.tier >= 2,
+  SILO: {
+    allows: ['openSilo', 'upgrade:silo'],
+    targets: () => ['silo:upgrade', 'silo'],
+    text: () => t('tut_silo'),
+    done: () => S.storage.silo.tier >= 2,
   },
-  T12: {
-    allows: ['openChicken:0', 'collectEgg:0', 'openCoop'],
-    targets: () => ['chicken:collect', 'chicken0'],
-    text: () => t('tut_T12'),
-    done: () => S.farm.chickens[0]?.status === 'hungry' && count('egg') >= 2,
+  // Level 2 arrives here (popup: corn, coop, chicken, egg, feed mill, bakery).
+  COOP: {
+    allows: ['openShop', 'buy:coop', 'place'],
+    targets: () => [PLACE, 'shop:coop', 'shop'],
+    text: () => (placing() ? t('tut_place') : t('tut_coop')),
+    done: () => S.farm.coopBuilt,
+    onEnter: () => tutorialGrantLevel(2),
+  },
+  CHICKS: {
+    allows: ['openShop', 'buy:chicken'],
+    targets: () => ['shop:chicken', 'shop'],
+    text: () => t('tut_chicks', { n: S.farm.chickens.length, m: TUTORIAL_CHICKENS }),
+    done: () => S.farm.chickens.length >= Math.min(TUTORIAL_CHICKENS, COOP_CAPACITY),
+  },
+  MILL: {
+    allows: ['openShop', 'buy:feedmill', 'place'],
+    targets: () => [PLACE, 'shop:feedmill', 'shop'],
+    text: () => (placing() ? t('tut_place') : t('tut_mill')),
+    done: () => S.farm.machines.feedmill.owned,
+  },
+  // Make chicken feed (2 wheat + 1 corn → 3 feed): drop it into the mill, wait, collect.
+  FEED: {
+    allows: ['openMachine:feedmill', 'startRecipe:feedmill', 'collectOutput:feedmill'],
+    targets: () => machineTargets('feedmill', 'mill', 'feed'),
+    text: () => machineText('feedmill', 'tut_feed', 'tut_feed_wait', 'tut_feed_collect'),
+    done: () => count('feed') >= 3 || S.farm.chickens.some((c) => c.status !== 'hungry'),
+  },
+  // Feed the chickens: tap the coop, sweep the feed over them.
+  EAT: {
+    allows: ['openCoop', 'feed'],
+    targets: () => (count('feed') > 0 ? ['tool:feed', ...chickKey('hungry'), 'coop'] : []),
+    text: () => t('tut_eat'),
+    done: () => S.farm.chickens.every((c) => c.status !== 'hungry') || (count('feed') === 0 && S.farm.chickens.some((c) => c.status !== 'hungry')),
+    top: true,
+  },
+  // Collect the eggs: tap the coop, sweep the basket over the chickens.
+  EGGS: {
+    allows: ['openCoop', 'collectEgg'],
+    targets: () => (S.farm.chickens.some((c) => c.status === 'ready') ? ['tool:basket', ...chickKey('ready'), 'coop'] : []),
+    text: () => (S.farm.chickens.some((c) => c.status === 'ready') ? t('tut_eggs') : t('tut_eggs_wait')),
+    done: () => S.farm.chickens.every((c) => c.status === 'hungry') && count('egg') >= 2,
+    top: true,
+  },
+  BAKERY: {
+    allows: ['openShop', 'buy:bakery', 'place'],
+    targets: () => [PLACE, 'shop:bakery', 'shop'],
+    text: () => (placing() ? t('tut_place') : t('tut_bakery')),
+    done: () => S.farm.machines.bakery.owned,
+  },
+  // Bake bread (3 wheat → 1 bread): drop it into the bakery, wait, collect.
+  BREAD: {
+    allows: ['openMachine:bakery', 'startRecipe:bakery', 'collectOutput:bakery'],
+    targets: () => machineTargets('bakery', 'bakery', 'bread'),
+    text: () => machineText('bakery', 'tut_bread', 'tut_bread_wait', 'tut_bread_collect'),
+    done: () => count('bread') >= 1,
   },
 };
 
-const ORDER = ['T01', 'T02', 'T03', 'T04', 'T05', 'T06', 'T07', 'T08', 'T09', 'T10', 'T11', 'T12'];
+const ORDER = ['SOW', 'REAP', 'MATCH', 'PLAY', 'MATS', 'SILO', 'COOP', 'CHICKS', 'MILL', 'FEED', 'EAT', 'EGGS', 'BAKERY', 'BREAD'];
+/** Saves from earlier walkthroughs resume at the matching (or an earlier) step. */
+const OLD_STEPS: Record<string, string> = {
+  T00: 'SOW', T01: 'SOW', T02: 'SOW', T03: 'REAP', T04: 'MATCH', T05: 'MATCH', T06: 'MATCH', T07: 'MATCH',
+  T08: 'MATCH', T09: 'PLAY', T10: 'MATS', T11: 'SILO', T12: 'COOP', BARN: 'SILO',
+};
 
-let blockedOnce = false;
 let matchEntered = false;
 let matchWon = false;
 let bubble: HTMLElement | null = null;
 let hand: HTMLElement | null = null;
-let veil: HTMLElement | null = null;
 let highlighted: Element | null = null;
 let farmVisible = true;
+const placing = (): boolean => !!stage().querySelector(`[data-tut="${PLACE}"]`);
 
 export const tutorial = {
   active: (): boolean => tutorialActive(),
   step: (): string => S.tutorial.stepId,
 
-  /** Boot: T00 sets up the start state (the fresh save already is it) and moves to T01. */
+  /** Boot: a fresh save (T00) or an old step id moves to its step here. */
   start(): void {
-    if (isTutorialStep('T00')) setTutorialStep('T01');
-    if (tutorialActive()) STEPS[S.tutorial.stepId]?.onEnter?.();
+    this.enterSaved();
     onChange(() => this.refresh());
-    onEvent((e) => {
-      if (e.type === 'collectBlocked' && e.storage === 'barn' && isTutorialStep('T07')) { blockedOnce = true; this.refresh(); }
-    });
     this.refresh();
+  },
+
+  /** After "Reset all game": the save is fresh again, so is the walkthrough. */
+  restart(): void {
+    matchEntered = false;
+    matchWon = false;
+    this.enterSaved();
+    this.refresh();
+  },
+
+  enterSaved(): void {
+    const old = OLD_STEPS[S.tutorial.stepId];
+    if (old) setTutorialStep(old);
+    if (tutorialActive()) STEPS[S.tutorial.stepId]?.onEnter?.();
   },
 
   allows(action: string, target?: string | number): boolean {
@@ -157,17 +209,17 @@ export const tutorial = {
     return step.allows.includes(key) || step.allows.includes(action);
   },
 
-  onMatchEnter(): void { if (isTutorialStep('T08')) { matchEntered = true; this.refresh(); } },
-  onMatchLeave(): void { matchEntered = false; if (isTutorialStep('T09')) { setTutorialStep('T08'); this.refresh(); } },
+  onMatchEnter(): void { if (isTutorialStep('MATCH')) { matchEntered = true; this.refresh(); } },
+  onMatchLeave(): void { matchEntered = false; if (isTutorialStep('PLAY')) { setTutorialStep('MATCH'); this.refresh(); } },
   onMatchWon(): void {
-    if (isTutorialStep('T09')) { grantTutorialBonusStars(2); matchWon = true; this.refresh(); }
+    if (isTutorialStep('PLAY')) { grantTutorialBonusStars(2); matchWon = true; this.refresh(); }
   },
   setFarmVisible(v: boolean): void { farmVisible = v; this.render(); },
 
   /** Advance through every completed step, then redraw the overlay. */
   refresh(): void {
     if (!tutorialActive()) { this.render(); return; }
-    for (let guard = 0; guard < 12; guard++) {
+    for (let guard = 0; guard < ORDER.length + 1; guard++) {
       const id = S.tutorial.stepId;
       const step = STEPS[id];
       if (!step || !step.done()) break;
@@ -183,17 +235,19 @@ export const tutorial = {
   render(): void {
     const root = stage();
     if (highlighted) { highlighted.classList.remove('tut-hl'); highlighted = null; }
-    const active = tutorialActive() && (farmVisible || S.tutorial.stepId === 'T09');
-    if (!active) { bubble?.remove(); hand?.remove(); veil?.remove(); bubble = hand = veil = null; return; }
+    const active = tutorialActive() && (farmVisible || S.tutorial.stepId === 'PLAY');
+    if (!active) { bubble?.remove(); hand?.remove(); bubble = hand = null; return; }
     const step = STEPS[S.tutorial.stepId];
     if (!step) return;
     if (!bubble) { bubble = el(`<div class="tut-bubble"><div class="farmer">${FARMER}</div><span></span></div>`); root.appendChild(bubble); }
     bubble.classList.toggle('top', !!step.top && farmVisible);
     bubble.classList.toggle('mid', !farmVisible);
     bubble.querySelector('span')!.textContent = step.text();
+    const keys = step.targets();
     let target: Element | null = null;
-    for (const key of step.targets()) {
-      target = root.querySelector(`[data-tut="${key}"]`);
+    let k = 0;
+    for (; k < keys.length; k++) {
+      target = root.querySelector(`[data-tut="${keys[k]}"]`);
       if (target) break;
     }
     if (target) {
@@ -205,6 +259,15 @@ export const tutorial = {
       hand.style.left = `${p.x}px`;
       hand.style.top = `${p.y}px`;
       hand.style.display = '';
+      // A drag tool (seed, sickle, feed, basket, a product) points the hand along the sweep to the next target.
+      const dest = /^(seed:|sickle|tool:|prod:)/.test(keys[k]) && keys[k + 1] ? root.querySelector(`[data-tut="${keys[k + 1]}"]`) : null;
+      hand.classList.toggle('drag', !!dest);
+      if (dest) {
+        const d = dest.getBoundingClientRect();
+        const q = toStage(d.left + d.width / 2, d.top + d.height * 0.4);
+        hand.style.setProperty('--dx', `${q.x - p.x}px`);
+        hand.style.setProperty('--dy', `${q.y - p.y}px`);
+      }
     } else if (hand) hand.style.display = 'none';
   },
 };
