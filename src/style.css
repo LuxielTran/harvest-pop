@@ -29,13 +29,13 @@ img { pointer-events: none; display: block; }
 .screen.on { display: block; }
 
 /* ---------- HUD ---------- */
-.hud { position: absolute; left: 0; right: 0; top: 0; height: 72px; padding: 10px 10px 0; display: flex; gap: 8px; align-items: flex-start; z-index: 5; }
+.hud { position: absolute; left: 0; right: 0; top: 0; height: 72px; padding: 10px 8px 0; display: flex; gap: 6px; align-items: flex-start; z-index: 5; }
 .pill {
-  display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px 0 6px; border-radius: 20px;
+  display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 10px 0 5px; border-radius: 20px;
   background: rgba(40, 28, 12, .78); color: #fff; font-weight: 900; font-size: 17px; box-shadow: 0 2px 0 rgba(0,0,0,.25);
 }
 .pill img { width: 26px; height: 26px; }
-.pill.lvl { flex: 1; position: relative; padding-right: 10px; gap: 8px; }
+.pill.lvl { flex: 1; min-width: 0; position: relative; padding-right: 10px; gap: 6px; }
 .pill.lvl .bar { flex: 1; height: 12px; border-radius: 6px; background: rgba(255,255,255,.2); overflow: hidden; }
 .pill.lvl .bar i { display: block; height: 100%; background: linear-gradient(#8de2ff, #2f8fe0); border-radius: 6px; transition: width .4s; }
 .pill.lvl b { font-size: 14px; white-space: nowrap; }
@@ -44,7 +44,9 @@ img { pointer-events: none; display: block; }
 
 /* ---------- Farm scene (2.5D) ---------- */
 /* The scene is its own stacking context: objects are depth-sorted by z-index inside it. */
-.scene { position: absolute; left: 0; right: 0; top: 72px; bottom: 96px; overflow: hidden; z-index: 1; }
+.scene { position: absolute; left: 0; right: 0; top: 72px; bottom: 96px; overflow: hidden; z-index: 1; touch-action: none; }
+/* The farm map, panned by the camera (its size is set from WORLD_SCALE). */
+.world { position: absolute; left: 0; top: 0; will-change: transform; }
 .scene .ground { position: absolute; inset: 0; background-size: 64px 32px; background-position: 0 0; }
 .scene .ground::after {
   content: ''; position: absolute; inset: 0;
@@ -72,15 +74,137 @@ img { pointer-events: none; display: block; }
 /* A plot is an isometric soil tile (92×46 top face + side faces); crops stand on it. */
 .plot { position: absolute; width: 92px; height: 60px; border: 0; padding: 0; background: none; transform: translate(-50%, -50%); }
 .plot .soil { position: absolute; left: 0; top: 0; width: 92px; height: 60px; }
-.plot.locked .price { position: absolute; left: 50%; top: 23px; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 3px; background: rgba(40,28,12,.78); color: #fff; font-weight: 900; font-size: 13px; padding: 2px 8px; border-radius: 10px; }
-.plot.locked .price img { width: 16px; height: 16px; }
 .plot .crop { position: absolute; left: 0; top: -26px; width: 92px; height: 72px; }
-/* Labels sit over the plot's own face: neighbouring diamonds share their tips, so nothing may hang above a plot. */
-.plot .timer { position: absolute; left: 50%; top: 23px; transform: translate(-50%, -50%); background: rgba(40,28,12,.78); color: #fff; font-size: 11px; font-weight: 900; padding: 1px 7px; border-radius: 10px; }
-.plot .bubble { position: absolute; left: 50%; top: 26px; transform: translate(-50%, -100%); width: 36px; height: 36px; border-radius: 50%; background: #fff; box-shadow: 0 3px 0 rgba(0,0,0,.2); display: flex; align-items: center; justify-content: center; animation: bob 1s infinite ease-in-out; }
-.plot .bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-top-color: #fff; border-bottom: 0; }
-.plot .bubble img { width: 26px; height: 26px; }
 .plot.ready .soil { filter: drop-shadow(0 0 3px #ffe16b) drop-shadow(0 0 6px #ffd21e); }
+.plot.hit { animation: plothit .28s ease-out; }
+@keyframes plothit { 40% { transform: translate(-50%, -50%) scale(1.08, .92); } }
+
+/* Tool tray (seeds / sickle) that opens above a tapped plot; its tools are dragged across the plots. */
+.tooltray {
+  position: absolute; z-index: 20; display: flex; gap: 10px; padding: 10px 12px; border-radius: 18px;
+  background: rgba(255, 244, 220, .82); border: 3px solid rgba(255,255,255,.9); box-shadow: 0 4px 10px rgba(0,0,0,.25);
+  animation: pop .15s ease-out; transition: opacity .15s;
+}
+.tooltray.dragging { opacity: .35; }
+.tooltray:has(.slotrow) { flex-wrap: wrap; justify-content: center; max-width: 300px; }
+
+/* Gem buttons: on a tray icon's lower-right corner (buy one / finish a batch), or wide with a label. */
+.gembtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px; border: 2px solid #fff; border-radius: 12px; padding: 0 6px;
+  background: linear-gradient(#5ff0a8, #18a866); box-shadow: 0 2px 0 #0f7a46; color: #fff; font-weight: 900; text-shadow: 0 1px 0 rgba(0,0,0,.25); cursor: pointer;
+}
+.gembtn img { width: 15px; height: 15px; filter: drop-shadow(0 1px 0 rgba(0,0,0,.2)); }
+.gembtn b { font-size: 12px; position: static; transform: none; background: none; padding: 0; }
+.gembtn.corner { position: absolute; right: -10px; bottom: -8px; height: 24px; z-index: 2; touch-action: none; }
+.tooltray .tool .gembtn.corner img { width: 15px; height: 15px; }
+.gembtn.wide { height: 32px; margin-top: 6px; padding: 0 10px; font-size: 13px; gap: 4px; }
+.gembtn.wide span { margin-right: 4px; }
+.gembtn.wide img { width: 18px; height: 18px; }
+.gembtn.wide b { font-size: 14px; }
+.gembtn:active { transform: translateY(2px); box-shadow: 0 0 0 #0f7a46; }
+.skiprow { flex-basis: 100%; display: flex; justify-content: center; }
+.slot .gembtn.corner { right: -9px; bottom: auto; top: -9px; height: 20px; padding: 0 4px; }
+.slot .gembtn.corner img { width: 12px; height: 12px; }
+.slot .gembtn b { position: static; transform: none; background: none; padding: 0; font-size: 11px; }
+
+/* A machine's production slots under its products: running (time left), waiting, done, empty, "+" to buy. */
+.slotrow { flex-basis: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding-top: 8px; border-top: 2px dashed rgba(122,74,31,.25); }
+.slot { position: relative; width: 46px; height: 46px; border-radius: 10px; background: rgba(255,255,255,.75); box-shadow: inset 0 0 0 2px rgba(122,74,31,.25); display: flex; align-items: center; justify-content: center; }
+.slot img { width: 32px; height: 32px; }
+.slot b { position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%); font-size: 10px; font-weight: 900; color: #fff; background: rgba(40,28,12,.8); border-radius: 7px; padding: 0 5px; white-space: nowrap; }
+.slot.wait img { opacity: .55; filter: grayscale(.6); }
+.slot.done { background: #e6f8dc; box-shadow: inset 0 0 0 2px #5cc24a; }
+.slot .ok { position: absolute; right: -4px; top: -4px; width: 18px; height: 18px; border-radius: 50%; background: var(--green); color: #fff; font-size: 12px; font-style: normal; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.slot.empty { background: rgba(255,255,255,.35); box-shadow: inset 0 0 0 2px rgba(122,74,31,.2); border: 2px dashed rgba(122,74,31,.35); }
+.slot.buyslot { border: 0; padding: 0; background: linear-gradient(#ffd25a, #ff9a2e); box-shadow: 0 3px 0 #c45f00; cursor: pointer; }
+.slot.buyslot span { font-size: 26px; font-weight: 900; color: #fff; line-height: 1; margin-top: -8px; text-shadow: 0 1px 0 rgba(0,0,0,.25); }
+.slot.buyslot .price { display: flex; align-items: center; gap: 1px; }
+.slot.buyslot .price img { width: 10px; height: 10px; }
+.tooltray .tool { position: relative; width: 58px; height: 58px; touch-action: none; cursor: grab; }
+.tooltray .tool img { width: 100%; height: 100%; filter: drop-shadow(0 3px 2px rgba(0,0,0,.3)); }
+.tooltray .tool.locked img { filter: grayscale(1) brightness(.9); opacity: .55; }
+.tooltray .qty, .dragtool .qty {
+  position: absolute; left: 50%; top: -12px; transform: translateX(-50%); min-width: 26px; height: 22px; padding: 0 7px; border-radius: 11px;
+  display: flex; align-items: center; justify-content: center; gap: 2px; background: #fff; color: var(--ink); font-size: 14px; font-weight: 900;
+  box-shadow: 0 2px 0 rgba(0,0,0,.2); white-space: nowrap;
+}
+.tooltray .qty img { width: 14px; height: 14px; filter: none; }
+.dragtool { position: absolute; z-index: 70; width: 64px; height: 64px; transform: translate(-50%, -80%) rotate(-12deg); pointer-events: none; }
+.dragtool img { width: 100%; height: 100%; filter: drop-shadow(0 6px 4px rgba(0,0,0,.35)); }
+.dragtool .qty { transform: translateX(-50%) rotate(12deg); }
+.dragtool.empty img { filter: grayscale(1) drop-shadow(0 6px 4px rgba(0,0,0,.35)); opacity: .7; }
+.dragtool.empty .qty { background: #ffd0d0; color: #b02020; }
+
+/* Moving buildings & plots: hold → lift; the footprint shows green (free) or red (blocked). */
+.obj.pressing, .plot.pressing { animation: pressing .5s linear forwards; }
+@keyframes pressing { to { filter: brightness(1.25) drop-shadow(0 0 6px #fff); } }
+.obj.moving, .plot.moving { margin-top: -14px; filter: drop-shadow(0 12px 6px rgba(0,0,0,.35)); opacity: .92; }
+.obj.moving.blocked, .plot.moving.blocked { filter: drop-shadow(0 12px 6px rgba(0,0,0,.35)) sepia(1) saturate(4) hue-rotate(-40deg); }
+.footprint { position: absolute; z-index: 99999; transform: translate(-50%, -50%); pointer-events: none; }
+.footprint svg { display: block; overflow: visible; }
+.footprint polygon { fill: rgba(92, 220, 80, .45); stroke: #fff; stroke-width: 2; }
+.footprint.blocked polygon { fill: rgba(240, 60, 60, .5); }
+.movectl { position: absolute; z-index: 100001; display: flex; gap: 14px; transform: translateX(-50%); }
+.movectl button { width: 48px; height: 48px; border: 3px solid #fff; border-radius: 50%; padding: 8px; box-shadow: 0 4px 0 rgba(0,0,0,.25); }
+.movectl button svg { display: block; width: 100%; height: 100%; }
+.movectl .mv-ok { background: linear-gradient(#7ad66a, #45b534); }
+.movectl .mv-ok:disabled { background: #a9a9a9; box-shadow: 0 4px 0 rgba(0,0,0,.15); cursor: not-allowed; }
+.movectl .mv-no { background: linear-gradient(#ff7a6a, #e04434); }
+
+/* A working machine bobs gently; a product held over it lights it up. */
+.obj.working img.bld { animation: working 1.2s infinite ease-in-out; transform-origin: 50% 100%; }
+@keyframes working { 50% { transform: scale(1.03, .97); } }
+.obj.drop img.bld { filter: drop-shadow(0 0 6px #fff) drop-shadow(0 0 12px #7ad66a); }
+
+/* The chicken coop: yard + back fences, the chickens, then the front fences over them. */
+.obj.coop { width: 216px; height: 194px; }
+.obj.coop img.pen { position: absolute; left: 0; top: 0; width: 216px; height: 194px; }
+.chick { position: absolute; width: 38px; height: 38px; transform: translate(-50%, -92%); }
+.chick > img { width: 100%; height: 100%; }
+.chick.feeding > img { animation: peck .5s infinite ease-in-out; transform-origin: 60% 90%; }
+@keyframes peck { 50% { transform: rotate(14deg) translateY(2px); } }
+.chick.hit { animation: chickhit .28s ease-out; }
+@keyframes chickhit { 40% { transform: translate(-50%, -92%) scale(1.18); } }
+.chick .cb {
+  position: absolute; left: 50%; top: -24px; transform: translateX(-50%); width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 0 rgba(0,0,0,.2); display: flex; align-items: center; justify-content: center; animation: bob 1s infinite ease-in-out;
+}
+.chick .cb img { width: 19px; height: 19px; }
+.chick.hungry .cb { background: #ffe1d6; }
+.chick .cbar { position: absolute; left: 4px; right: 4px; top: -8px; height: 6px; border-radius: 3px; background: rgba(40,28,12,.55); overflow: hidden; }
+.chick .cbar i { display: block; height: 100%; width: 0; background: linear-gradient(#ffe48a, #f3b51e); transition: width .4s linear; }
+
+/* Level-up popup: the new level and what it unlocks. */
+.lvlup-badge { position: relative; width: 84px; height: 84px; margin: 0 auto 6px; animation: pop .35s ease-out; }
+.lvlup-badge img { width: 100%; height: 100%; }
+.lvlup-badge b { position: absolute; right: -6px; bottom: -4px; min-width: 34px; height: 34px; border-radius: 17px; background: var(--orange); color: #fff; font-size: 20px; font-weight: 900; display: flex; align-items: center; justify-content: center; border: 3px solid #fff; }
+.grid.unlocks { grid-template-columns: repeat(3, 1fr); margin: 8px 0 12px; }
+.grid.unlocks .cell { position: relative; animation: pop .3s ease-out backwards; }
+.grid.unlocks .cell:nth-child(2) { animation-delay: .05s; } .grid.unlocks .cell:nth-child(3) { animation-delay: .1s; }
+.grid.unlocks .cell:nth-child(4) { animation-delay: .15s; } .grid.unlocks .cell:nth-child(5) { animation-delay: .2s; }
+.grid.unlocks .cell:nth-child(6) { animation-delay: .25s; }
+.grid.unlocks .gift { position: absolute; right: 4px; top: 4px; background: var(--green); color: #fff; font-size: 12px; border-radius: 9px; padding: 1px 6px; }
+.obj .bubble b { position: absolute; right: -6px; top: -6px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--red); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
+
+/* A product's recipe, shown while it is held. */
+.recipetip {
+  position: absolute; z-index: 21; min-width: 150px; padding: 8px 10px; border-radius: 14px; text-align: center;
+  background: #fff8e8; border: 3px solid var(--wood); box-shadow: 0 4px 10px rgba(0,0,0,.25); pointer-events: none;
+}
+.recipetip > b { display: block; font-size: 15px; }
+.recipetip > small { display: block; font-size: 12px; color: #7b6a4e; margin-bottom: 6px; }
+.recipetip .need { gap: 6px; }
+.recipetip .cell { min-width: 52px; padding: 4px; }
+.recipetip .cell img { width: 30px; height: 30px; }
+
+/* Time left on a growing plot (only shown when the plot is tapped). */
+.plotinfo {
+  position: absolute; z-index: 20; width: 170px; padding: 6px 10px 8px; border-radius: 14px; text-align: center;
+  background: rgba(40,28,12,.85); color: #fff; font-size: 13px; font-weight: 900; box-shadow: 0 4px 10px rgba(0,0,0,.25); animation: pop .15s ease-out;
+}
+.plotinfo > b { display: block; font-size: 16px; }
+.plotinfo .bar { height: 12px; margin: 5px 0; border-radius: 6px; background: rgba(255,255,255,.2); overflow: hidden; }
+.plotinfo .bar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(#a6ef6e, #48b52f); transition: width .4s linear; }
 
 /* ---------- Bottom bar ---------- */
 .bottombar { position: absolute; left: 0; right: 0; bottom: 0; height: 96px; display: flex; justify-content: space-around; align-items: flex-end; padding: 0 8px 10px; z-index: 5;
@@ -100,6 +224,13 @@ img { pointer-events: none; display: block; }
 .btn.orange { background: linear-gradient(#ffb04d, #ff8a1e); box-shadow: 0 4px 0 #b85a00; }
 .btn.blue { background: linear-gradient(#6fbcff, #3a8fe8); box-shadow: 0 4px 0 #1f5fa8; }
 .btn.grey { background: linear-gradient(#b9c2cf, #8f9aa8); box-shadow: 0 4px 0 #5f6a78; }
+.btn.red { background: linear-gradient(#ff7a6a, #e04434); box-shadow: 0 4px 0 #a8261a; }
+.btn:disabled { filter: grayscale(1); opacity: .6; }
+/* "Reset all game": the player types the confirmation word. */
+.confirm-input {
+  display: block; width: 100%; height: 46px; margin: 12px 0; padding: 0 14px; border: 3px solid var(--wood); border-radius: 12px;
+  font: 900 18px var(--font); color: var(--ink); text-align: center; background: #fff; user-select: text; -webkit-user-select: text;
+}
 .btn:active { transform: translateY(3px); box-shadow: none; }
 .btn:disabled { filter: grayscale(.7) brightness(.85); opacity: .8; pointer-events: none; }
 .btn.small { height: 36px; font-size: 14px; padding: 0 12px; border-radius: 10px; }
@@ -150,9 +281,19 @@ img { pointer-events: none; display: block; }
 
 /* ---------- Tutorial ---------- */
 .tut-hl { position: relative; z-index: 999 !important; animation: hl 1s infinite ease-in-out; }
+/* Map objects keep their absolute placement while highlighted. */
+.obj.tut-hl, .plot.tut-hl, .chick.tut-hl { position: absolute; }
+.obj.tut-hl, .plot.tut-hl { z-index: 99990 !important; }
 @keyframes hl { 0%, 100% { filter: drop-shadow(0 0 4px #fff) drop-shadow(0 0 8px #ffe16b); } 50% { filter: drop-shadow(0 0 10px #fff) drop-shadow(0 0 20px #ffd21e); } }
 .tut-hand { position: absolute; z-index: 60; width: 44px; height: 44px; pointer-events: none; animation: hand .8s infinite ease-in-out; transform: translate(-20%, -10%); }
 @keyframes hand { 0%, 100% { margin-top: 0; } 50% { margin-top: 10px; } }
+/* Drag hint: press the tool, then sweep to the field (--dx/--dy set by the tutorial). */
+.tut-hand.drag { animation: handdrag 1.6s infinite ease-in-out; }
+@keyframes handdrag {
+  0%, 15% { margin: 0; opacity: 1; }
+  75% { margin-left: var(--dx); margin-top: var(--dy); opacity: 1; }
+  90%, 100% { margin-left: var(--dx); margin-top: var(--dy); opacity: 0; }
+}
 .tut-bubble { position: absolute; left: 14px; right: 14px; bottom: 104px; z-index: 50; background: #fff; border-radius: 18px; border: 4px solid var(--wood); padding: 12px 12px 12px 72px; font-size: 15px; font-weight: 700; line-height: 1.3; box-shadow: 0 6px 0 var(--wood-dark), 0 10px 20px rgba(0,0,0,.3); min-height: 70px; display: flex; align-items: center; pointer-events: none; }
 .tut-bubble.top { bottom: auto; top: 84px; }
 .tut-bubble.mid { bottom: auto; top: 600px; }

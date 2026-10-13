@@ -65,6 +65,14 @@ export const ICON_STAR = svg(64, 64, `
 <path d="M32 7l7.6 16.4 18 2.1-13.3 12.3 3.6 17.8L32 46.9l-15.9 8.7 3.6-17.8L6.4 25.5l18-2.1z" fill="url(#sg)"/>
 <path d="M24 20l6-11 2 9z" fill="#fff" opacity=".55"/>`);
 
+// A faceted green gem: the premium currency.
+export const ICON_GEM = svg(64, 64, `
+<path d="M18 10h28l14 16L32 58 4 26z" fill="#0f8a52"/>
+<path d="M20 12h24l12 14H8z" fill="#5ff0a8"/><path d="M8 26h48L32 55z" fill="#1fc47a"/>
+<path d="M20 12l6 14h12l6-14z" fill="#9dffd0"/><path d="M26 26h12L32 55z" fill="#3ee08f"/>
+<path d="M8 26l18 0 6 29z" fill="#18a866"/>
+<path d="M22 15l3 7" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".85"/>`);
+
 export const ICON_XP = svg(64, 64, `
 <circle cx="32" cy="32" r="28" fill="#2f8fe0"/><circle cx="32" cy="30" r="25" fill="#5ab4ff"/>
 <text x="32" y="40" font-family="Arial Black,Arial,sans-serif" font-weight="900" font-size="24" text-anchor="middle" fill="#fff">XP</text>`);
@@ -108,10 +116,23 @@ export const ICON_EGG = svg(64, 64, `
 <path d="M32 8c11 0 18 15 18 30a18 18 0 0 1-36 0C14 23 21 8 32 8z" fill="url(#eg)"/>
 <ellipse cx="24" cy="22" rx="4" ry="7" fill="#fff" opacity=".7" transform="rotate(15 24 22)"/>`);
 
-export const ICON_FEED = svg(64, 64, `
-<path d="M14 24h36l-3 32H17z" fill="#b5763a"/><path d="M12 16h40v10H12z" fill="#d79553"/><path d="M14 18h36v3H14z" fill="#f0b574"/>
-<g fill="#f3c54a"><circle cx="24" cy="34" r="3"/><circle cx="34" cy="38" r="3"/><circle cx="42" cy="32" r="3"/><circle cx="28" cy="46" r="3"/><circle cx="40" cy="46" r="3"/></g>
-<text x="32" y="60" font-family="Arial,sans-serif" font-weight="700" font-size="9" text-anchor="middle" fill="#fff">FEED</text>`);
+// Animal feed: a burlap sack printed with the face of the animal it is for. Each animal's
+// feed reuses feedSack() with its own face (drawn in a 24×24 box centred on 0,0).
+const feedSack = (face: string, tint: string): string => svg(64, 64, `
+<ellipse cx="32" cy="60" rx="20" ry="3.5" fill="#000" opacity=".15"/>
+<path d="M14 20c-2 12-3 26-1 36 1 3 3 4 6 4h26c3 0 5-1 6-4 2-10 1-24-1-36z" fill="#c9965a"/>
+<path d="M18 22c-1 10-2 22 0 32" stroke="#e0b47c" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
+<path d="M12 16c6 4 34 4 40 0l-2 7c-6 3-30 3-36 0z" fill="#a8743c"/>
+<path d="M22 10c3 4 17 4 20 0l-1 6c-4 2-14 2-18 0z" fill="#8a5a2b"/>
+<g fill="#f3c54a"><circle cx="27" cy="12" r="2.2"/><circle cx="32" cy="10.5" r="2.2"/><circle cx="37" cy="12" r="2.2"/></g>
+<circle cx="32" cy="39" r="14" fill="#fff8e8" stroke="${tint}" stroke-width="2.5"/>
+<g transform="translate(32 39)">${face}</g>`);
+
+const CHICKEN_FACE = `<path d="M-4 -12c-2-4 1-6 3-4 2-4 6-3 5 1 4-2 5 2 2 4z" fill="#e8413c"/>
+<circle cx="0" cy="0" r="9" fill="#fff"/><path d="M-1 1l8 2-8 3z" fill="#f7a823"/><path d="M0 6c0 3-3 4-4 2" fill="#e8413c"/>
+<circle cx="-3.5" cy="-2" r="1.8" fill="#2b2b2b"/><circle cx="3.5" cy="-2.5" r="1.8" fill="#2b2b2b"/>`;
+
+export const ICON_FEED = feedSack(CHICKEN_FACE, '#e8413c');
 
 export const ICON_BREAD = svg(64, 64, `
 <path d="M10 40c0-12 10-22 22-22s22 10 22 22v8a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4z" fill="#b97a2c"/>
@@ -226,23 +247,84 @@ export const ICON_BAKERY = ((): string => {
   return svg(120, 120, s);
 })();
 
-export const ICON_COOP = ((): string => {
-  const p = isoAt(54, 96);
-  const wi = 32, wj = 24, h = 20, rh = 12, o = 3;
-  let s = `<defs>${SHADOW_FILTER}</defs>` + isoShadow(p, wi, wj, 7);
-  s += isoBox(p, 0, 0, 0, wi, wj, h, { l: '#ef7a46', r: '#c4542a', t: '#f58b5a' });
-  for (let z = 5; z < h - 2; z += 5) s += ln(p(0, wj, z), p(0, 0, z), '#b2522f', 1, 'opacity=".35"') + ln(p(0, 0, z), p(wi, 0, z), '#8b3a1c', 1, 'opacity=".4"');
-  s += isoRoof(p, wi, wj, h, rh, o, { far: '#8b5a3c', near: '#5a3622', ridge: '#a8744f', gable: '#ef7a46' });
-  // Round door on the gable and the ramp down to the ground.
-  s += pg([p(0, 17, 4), p(0, 7, 4), p(-14, 7, 0), p(-14, 17, 0)], '#c98b4a');
-  for (let k = 1; k <= 3; k++) s += ln(p(-3.5 * k, 7, 4 - k), p(-3.5 * k, 17, 4 - k), '#8a5a2b', 1.5);
-  const [hx, hy] = p(0, 12, 10);
-  s += `<circle cx="${n1(hx)}" cy="${n1(hy)}" r="5.5" fill="#3a1a0a" stroke="#ffe9a8" stroke-width="2"/>`;
-  // Nest box on the right face.
-  s += pg(rightQuad(p, 9, 23, 5, 14), '#ffe9a8') + ln(p(16, 0, 5), p(16, 0, 14), '#8b3a1c', 1.5) + ln(p(9, 0, 9.5), p(23, 0, 9.5), '#8b3a1c', 1.5);
-  s += baseTrim(p, wi, wj, '#ffd9b3');
-  return svg(110, 110, s);
+// The chicken coop is a fenced pen (a 4×4-cell footprint = 104 iso units a side) with a
+// red hen house on stilts in the back corner, a feed trough and a dirt yard. It comes in
+// two layers so the chickens walk INSIDE it: COOP_BACK (yard, back fences, house) under
+// them and COOP_FRONT (the two front fences) over them. Both share one 216×194 frame.
+const COOP_W = 216;
+const COOP_H = 194;
+const COOP_N = 104;
+const COOP_E = 4; // fence inset from the footprint edge
+const coopP = isoAt(108, 190);
+const MESH = '<pattern id="mesh" width="8" height="7" patternUnits="userSpaceOnUse"><path d="M0 3.5L2 0h4l2 3.5L6 7H2z" fill="none" stroke="#fff" stroke-width=".9" opacity=".9"/></pattern>';
+
+/** One side of chicken-wire fence from (i, j) a to b: mesh panel, rails, wooden posts. */
+function fenceSide(p: Proj, a: [number, number], b: [number, number]): string {
+  const H = 22;
+  let s = pg([p(a[0], a[1], 0), p(b[0], b[1], 0), p(b[0], b[1], H), p(a[0], a[1], H)], 'url(#mesh)');
+  s += ln(p(a[0], a[1], H), p(b[0], b[1], H), '#a0522d', 2.5) + ln(p(a[0], a[1], 2), p(b[0], b[1], 2), '#a0522d', 2);
+  for (let k = 0; k <= 4; k++) {
+    const i = a[0] + ((b[0] - a[0]) * k) / 4;
+    const j = a[1] + ((b[1] - a[1]) * k) / 4;
+    s += ln(p(i, j, 0), p(i, j, H + 5), '#7a3d16', 4) + ln(p(i, j, 1), p(i, j, H + 4), '#c97a48', 1.3);
+  }
+  return s;
+}
+
+export const COOP_BACK = ((): string => {
+  const p = coopP;
+  const n = COOP_N, e = COOP_E;
+  let s = `<defs>${SHADOW_FILTER}${MESH}<radialGradient id="dirt" cx="50%" cy="55%" r="62%"><stop offset="0" stop-color="#ddb05c"/><stop offset=".75" stop-color="#bf8f40"/><stop offset="1" stop-color="#8f8a36"/></radialGradient></defs>`;
+  s += isoShadow(p, n, n, 3);
+  s += pg([p(e, e), p(n - e, e), p(n - e, n - e), p(e, n - e)], 'url(#dirt)');
+  // Scattered grain on the yard.
+  for (let k = 0; k < 46; k++) {
+    const [x, y] = p(10 + ((k * 37) % 84), 10 + ((k * 53) % 84));
+    s += `<ellipse cx="${n1(x)}" cy="${n1(y)}" rx="1.6" ry="1" fill="#f6dc7a" opacity=".85"/>`;
+  }
+  s += fenceSide(p, [e, n - e], [n - e, n - e]) + fenceSide(p, [n - e, n - e], [n - e, e]);
+  // Feed trough along the left fence.
+  s += isoBox(p, 12, 58, 0, 12, 32, 8, { l: '#a86a3a', r: '#7d4a22', t: '#c98a52' });
+  s += pg([p(14, 60, 8), p(22, 60, 8), p(22, 88, 8), p(14, 88, 8)], '#5e3517');
+  // Hen house on stilts in the back corner.
+  const hi = 64, hj = 64, w = 30, lift = 10;
+  for (const [i, j] of [[hi, hj], [hi + w, hj], [hi, hj + w]]) s += ln(p(i + 2, j + 2, 0), p(i + 2, j + 2, lift), '#6b3a1a', 3.5);
+  s += isoBox(p, hi, hj, lift, w, w, 3, { l: '#9c6436', r: '#7a4a22', t: '#b9834a' });
+  const q: Proj = (i, j, z = 0) => p(i + hi + 3, j + hj + 3, z + lift + 3);
+  const hw = 24, hh = 20;
+  s += isoBox(q, 0, 0, 0, hw, hw, hh, { l: '#d9322b', r: '#a8221d', t: '#e8453c' });
+  for (let z = 5; z < hh; z += 5) s += ln(q(0, hw, z), q(0, 0, z), '#a8221d', 1, 'opacity=".5"') + ln(q(0, 0, z), q(hw, 0, z), '#7d1612', 1, 'opacity=".5"');
+  s += isoRoof(q, hw, hw, hh, 13, 3, { far: '#3a3a3a', near: '#1d1d1d', ridge: '#fff', gable: '#d9322b' });
+  s += ln(q(0, 0, 0), q(0, 0, hh), '#fff', 2) + ln(q(0, hw, 0), q(0, hw, hh), '#fff', 2) + ln(q(hw, 0, 0), q(hw, 0, hh), '#fff', 2);
+  // Door on the left face, a window on the right, and the ramp down to the yard.
+  s += pg(leftQuad(q, 8, 17, 0, 12), '#fff') + pg(leftQuad(q, 9.5, 15.5, 0, 10.5), '#3a1a0a');
+  s += pg(rightQuad(q, 8, 16, 8, 15), '#fff') + pg(rightQuad(q, 9.5, 14.5, 9, 14), '#2b2b2b');
+  s += pg([q(0, 8.5, 0), q(0, 16.5, 0), q(-20, 16.5, -lift - 3), q(-20, 8.5, -lift - 3)], '#a0633a');
+  for (let k = 1; k <= 4; k++) s += ln(q(-4 * k, 8.5, -((lift + 3) * k) / 5), q(-4 * k, 16.5, -((lift + 3) * k) / 5), '#6b3a1a', 1.5);
+  return svg(COOP_W, COOP_H, s);
 })();
+
+export const COOP_FRONT = svg(COOP_W, COOP_H, `<defs>${MESH}</defs>`
+  + fenceSide(coopP, [COOP_E, COOP_N - COOP_E], [COOP_E, COOP_E]) + fenceSide(coopP, [COOP_E, COOP_E], [COOP_N - COOP_E, COOP_E]));
+
+/** Where each chicken stands inside the pen (feet), in COOP_BACK's 216×194 frame; up to 6. */
+export const COOP_SLOTS: { x: number; y: number }[] = [[30, 30], [58, 24], [24, 54], [50, 48], [80, 38], [40, 76]]
+  .map(([i, j]) => { const [x, y] = coopP(i, j); return { x: n1(x), y: n1(y) }; });
+export const COOP_SIZE = { w: COOP_W, h: COOP_H };
+
+/** The whole pen in one picture (Shop icon). */
+export const ICON_COOP = COOP_BACK.replace(/<\/svg>$/, '') + COOP_FRONT.replace(/^<svg[^>]*>/, '');
+
+// An empty wicker basket (the eggs go into it as it sweeps over the chickens).
+export const ICON_BASKET = svg(64, 64, `
+<ellipse cx="32" cy="58" rx="22" ry="4" fill="#000" opacity=".15"/>
+<path d="M14 30C14 12 50 12 50 30" fill="none" stroke="#8b5a2b" stroke-width="5" stroke-linecap="round"/>
+<path d="M14 30C14 12 50 12 50 30" fill="none" stroke="#c98a4a" stroke-width="2" stroke-linecap="round"/>
+<ellipse cx="32" cy="31" rx="23" ry="5" fill="#6b3f1c"/>
+<path d="M8 30h48l-6 24a4 4 0 0 1-4 3H18a4 4 0 0 1-4-3z" fill="#c98a4a"/>
+<path d="M10 37h44M12 45h40M14 52h36" stroke="#8b5a2b" stroke-width="2"/>
+<path d="M18 30l4 26M28 30l1 27M36 30l-1 27M46 30l-4 26" stroke="#a86a3a" stroke-width="2"/>
+<path d="M8 30h48v4H8z" fill="#a86a3a"/>`);
 
 // ---------------------------------------------------------------------------
 // Plots: an isometric soil tile with side faces, and the grass tile of a plot
@@ -573,8 +655,8 @@ export const ICON_WITCH = svg(64, 64, `
 <path d="M24 47q8 6 16 0" stroke="#1a0a2a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
 <g fill="#b6ff6b"><path d="M54 12l1.6 4 4 1.6-4 1.6-1.6 4-1.6-4-4-1.6 4-1.6z"/><path d="M8 44l1.2 3 3 1.2-3 1.2-1.2 3-1.2-3-3-1.2 3-1.2z"/></g>`);
 
-/** The goal icon for "collect any cropsies". */
-export const ICON_BASKET = svg(64, 64, `
+/** The goal icon for "collect any cropsies" (a basket of fruit; the farm's egg basket is ICON_BASKET). */
+export const ICON_ANY_GOAL = svg(64, 64, `
 <path d="M14 28c0-14 36-14 36 0" stroke="#8a5a2b" stroke-width="4" fill="none"/>
 <circle cx="22" cy="30" r="8" fill="#e8413c"/><circle cx="34" cy="27" r="8" fill="#ffd23a"/><circle cx="44" cy="31" r="7" fill="#ff8a3d"/>
 <path d="M8 32h48l-6 24H14z" fill="#c98b4a" stroke="#8a5a2b" stroke-width="2.5" stroke-linejoin="round"/>
@@ -587,17 +669,33 @@ export const TILE_COLORS: Record<string, string> = {
 export const ITEM_ICON: Record<string, string> = {
   wheat: ICON_WHEAT, corn: ICON_CORN, egg: ICON_EGG, feed: ICON_FEED, bread: ICON_BREAD,
   nail: ICON_NAIL, screw: ICON_SCREW, bolt: ICON_BOLT, tape: ICON_TAPE,
-  coin: ICON_COIN, star: ICON_STAR, xp: ICON_XP, chicken: ICON_CHICKEN,
+  coin: ICON_COIN, star: ICON_STAR, gem: ICON_GEM, xp: ICON_XP, chicken: ICON_CHICKEN,
   shovel: ICON_SHOVEL, moves: ICON_HORSESHOE, witch: ICON_WITCH,
 };
 
 /** The HUD icon of a match goal. */
 export function goalIcon(g: { type: string; tile?: string }, animal?: string): string {
-  if (g.type === 'collect') return g.tile === 'any' ? ICON_BASKET : TILE_ART[g.tile!];
+  if (g.type === 'collect') return g.tile === 'any' ? ICON_ANY_GOAL : TILE_ART[g.tile!];
   if (g.type === 'mud') return MUD_TILE;
   if (g.type === 'crate') return CRATE_TILE;
   if (g.type === 'soil') return ICON_SOIL;
   return animal === 'piglet' ? PIGLET_TILE : CHICK_TILE;
 }
 
-export const svgUrl = (s: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+// Accepts either inline SVG markup (drawn above) or an image URL from ASSET below,
+// so any art constant can be swapped for a file without touching its call sites.
+export const svgUrl = (s: string): string =>
+  s.trimStart().startsWith('<') ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}` : s;
+
+// ---------------------------------------------------------------------------
+// Image/sound files dropped into src/assets/ are picked up automatically, keyed by
+// file name without extension: src/assets/grass_sickle.png -> ASSET.grass_sickle.
+// Vite inlines them as data: URLs, so the build stays one dist/index.html.
+const files = import.meta.glob<string>('./assets/*.{png,webp,jpg,jpeg,gif,svg,mp3,ogg,wav,m4a}', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+export const ASSET: Record<string, string> = Object.fromEntries(
+  Object.entries(files).map(([path, url]) => [path.replace(/^.*\/|\.[^.]+$/g, ''), url]),
+);

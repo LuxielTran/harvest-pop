@@ -4,22 +4,25 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import {
-  ANIMALS, BOOSTERS, CHICKEN_COST, COOP_CAPACITY, COOP_COST, CROPS, ITEMS, MACHINES, MATERIAL_PRICE, ORDER_BONUS,
-  ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOT_COUNT, RECIPES, REPLAY_COINS, REVIVE_PRICE, STORAGE_START,
-  MATCH_LEVELS, STORAGE_UPGRADES, TUTORIAL_START, farmLevelForXp, winCoins, type StorageType, type StorageUpgrade,
+  ANIMALS, BOOSTERS, CHICKEN_COST, COOP_UNLOCK, CROP_GIFT, COOP_CAPACITY, COOP_COST, CROPS, DEFAULT_LAYOUT, ITEMS, MACHINES, MACHINE_SLOTS_MAX, MATERIAL_PRICE, ORDER_BONUS,
+  ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOTS_MAX, PLOTS_START, RECIPES, REPLAY_COINS, REVIVE_PRICE, STORAGE_START,
+  CROP_GEM_PRICE, GEM_START, MATCH_LEVELS, STORAGE_UPGRADES, TUTORIAL_START, gemsFor, winCoins, XP_THRESHOLDS, farmLevelForXp, maxPlots, slotPrice, type StorageType, type StorageUpgrade,
 } from './config';
 
-export type PlotStatus = 'locked' | 'empty' | 'growing' | 'ready';
+export type PlotStatus = 'empty' | 'growing' | 'ready';
 export interface PlotState { status: PlotStatus; crop: string | null; readyAt: number; }
-export type ChickenStatus = 'hungry' | 'producing' | 'ready';
+/** A chicken waits for feed (hungry), eats while it lays (feeding), then has eggs (ready). */
+export type ChickenStatus = 'hungry' | 'feeding' | 'ready';
 export interface ChickenState { status: ChickenStatus; readyAt: number; }
-export type MachineStatus = 'idle' | 'processing' | 'output';
-export interface MachineState { owned: boolean; status: MachineStatus; recipe: string | null; readyAt: number; }
+/** One batch in a machine. Batches run one after another in queue order; a finished one waits to be collected. */
+export interface MachineJob { recipe: string; readyAt: number; }
+/** `slots` = how many batches (running, waiting or finished) the machine can hold. */
+export interface MachineState { owned: boolean; slots: number; queue: MachineJob[]; }
 export interface StorageState { tier: number; cap: number; items: Record<string, number>; }
 export interface OrderState { id: number; items: { item: string; qty: number }[]; coin: number; exp: number; }
 
 export interface SaveData {
-  wallet: { coin: number; star: number };
+  wallet: { coin: number; star: number; gem: number };
   progress: { xp: number };
   storage: Record<StorageType, StorageState>;
   upgradeWallet: Record<string, number>;
@@ -28,13 +31,15 @@ export interface SaveData {
   boosters: Record<string, number>;
   /** First-time match tutorials already shown (key → 1). */
   tips: Record<string, number>;
-  tutorial: { stepId: string; feedGranted: boolean; bonusStars: number };
+  tutorial: { stepId: string; seedsGranted: boolean; levelGranted: boolean; bonusStars: number };
   farm: {
     plots: PlotState[];
     coopBuilt: boolean;
     chickens: ChickenState[];
     machines: Record<string, MachineState>;
     orders: OrderState[];
+    /** Where the player moved buildings / plots (front grid cell); missing keys use DEFAULT_LAYOUT. */
+    layout: Record<string, { a: number; b: number }>;
     orderSeq: number;
   };
   settings: { sound: number; music: number; haptic: number };
@@ -55,6 +60,7 @@ export type GameEvent =
   | { type: 'xp'; delta: number }
   | { type: 'levelUp'; level: number }
   | { type: 'star'; delta: number }
+  | { type: 'gem'; delta: number }
   | { type: 'storageUpgraded'; storage: StorageType }
   | { type: 'action'; action: string; target?: string };
 const eventListeners = new Set<(e: GameEvent) => void>();
@@ -65,27 +71,28 @@ export const now = (): number => Date.now();
 
 function freshSave(): SaveData {
   return {
-    wallet: { coin: TUTORIAL_START.coin, star: 0 },
+    wallet: { coin: TUTORIAL_START.coin, star: 0, gem: GEM_START },
     progress: { xp: 0 },
     storage: {
       silo: { tier: 1, cap: STORAGE_START.silo, items: {} },
-      barn: { tier: 1, cap: STORAGE_START.barn, items: { feed: TUTORIAL_START.starterFeed } },
+      barn: { tier: 1, cap: STORAGE_START.barn, items: {} },
     },
     upgradeWallet: {},
     match: { bestStars: {} },
     boosters: {},
     tips: {},
-    tutorial: { stepId: 'T00', feedGranted: false, bonusStars: 0 },
+    tutorial: { stepId: 'T00', seedsGranted: false, levelGranted: false, bonusStars: 0 },
     farm: {
-      plots: Array.from({ length: PLOT_COUNT }, () => ({ status: 'locked' as PlotStatus, crop: null, readyAt: 0 })),
+      plots: Array.from({ length: PLOTS_START }, () => ({ status: 'empty' as PlotStatus, crop: null, readyAt: 0 })),
       coopBuilt: false,
       chickens: [],
       machines: {
-        feedmill: { owned: true, status: 'idle', recipe: null, readyAt: 0 },
-        bakery: { owned: false, status: 'idle', recipe: null, readyAt: 0 },
+        feedmill: { owned: false, slots: 1, queue: [] },
+        bakery: { owned: false, slots: 1, queue: [] },
       },
       orders: [],
       orderSeq: 1,
+      layout: {},
     },
     settings: { sound: 1, music: 1, haptic: 1 },
     lastSeen: now(),
@@ -112,6 +119,7 @@ export function loadFromSave(raw: Record<string, any>): void {
   const w = obj(hp.wallet);
   f.wallet.coin = Math.max(0, num(w.coin, f.wallet.coin));
   f.wallet.star = Math.max(0, num(w.star, 0));
+  f.wallet.gem = Math.max(0, num(w.gem, GEM_START)); // saves from before gems start with the opening amount
   f.progress.xp = Math.max(0, num(obj(hp.progress).xp, 0));
   for (const t of ['silo', 'barn'] as StorageType[]) {
     const st = obj(obj(hp.storage)[t]);
@@ -125,13 +133,16 @@ export function loadFromSave(raw: Record<string, any>): void {
   f.tips = numMap(hp.tips);
   const tut = obj(hp.tutorial);
   f.tutorial.stepId = typeof tut.stepId === 'string' ? tut.stepId : 'T00';
-  f.tutorial.feedGranted = tut.feedGranted === true;
+  f.tutorial.levelGranted = tut.levelGranted === true;
+  f.tutorial.seedsGranted = tut.seedsGranted === true;
   f.tutorial.bonusStars = num(tut.bonusStars, 0);
   const farm = obj(hp.farm);
   if (Array.isArray(farm.plots)) {
-    farm.plots.slice(0, PLOT_COUNT).forEach((p: unknown, i: number) => {
+    // The first PLOTS_START fields always exist; bought ones (up to PLOTS_MAX) follow.
+    farm.plots.slice(0, PLOTS_MAX).forEach((p: unknown, i: number) => {
       const o = obj(p);
-      const status = ['locked', 'empty', 'growing', 'ready'].includes(o.status) ? (o.status as PlotStatus) : 'locked';
+      // Older saves had plots for sale ('locked'); every saved plot is open now.
+      const status = ['growing', 'ready'].includes(o.status) ? (o.status as PlotStatus) : 'empty';
       f.farm.plots[i] = { status, crop: typeof o.crop === 'string' && CROPS[o.crop] ? o.crop : null, readyAt: num(o.readyAt, 0) };
       if ((status === 'growing' || status === 'ready') && !f.farm.plots[i].crop) f.farm.plots[i] = { status: 'empty', crop: null, readyAt: 0 };
     });
@@ -140,16 +151,21 @@ export function loadFromSave(raw: Record<string, any>): void {
   if (Array.isArray(farm.chickens)) {
     f.farm.chickens = farm.chickens.slice(0, COOP_CAPACITY).map((c: unknown) => {
       const o = obj(c);
-      const status = ['hungry', 'producing', 'ready'].includes(o.status) ? (o.status as ChickenStatus) : 'hungry';
+      // Older saves called the eating state 'producing'.
+      const raw = o.status === 'producing' ? 'feeding' : o.status;
+      const status = ['hungry', 'feeding', 'ready'].includes(raw) ? (raw as ChickenStatus) : 'hungry';
       return { status, readyAt: num(o.readyAt, 0) };
     });
   }
   for (const id of Object.keys(f.farm.machines)) {
     const m = obj(obj(farm.machines)[id]);
     if (!Object.keys(m).length) continue;
-    const status = ['idle', 'processing', 'output'].includes(m.status) ? (m.status as MachineStatus) : 'idle';
-    const recipe = typeof m.recipe === 'string' && RECIPES[m.recipe] ? m.recipe : null;
-    f.farm.machines[id] = { owned: m.owned === true || id === 'feedmill', status: recipe ? status : 'idle', recipe, readyAt: num(m.readyAt, 0) };
+    const queue: MachineJob[] = Array.isArray(m.queue)
+      ? m.queue.map((j: unknown) => obj(j)).filter((j: Record<string, any>) => RECIPES[j.recipe]?.machine === id).map((j: Record<string, any>) => ({ recipe: j.recipe as string, readyAt: num(j.readyAt, 0) }))
+      : []; // older saves held one batch as status / recipe / readyAt
+    if (!Array.isArray(m.queue) && typeof m.recipe === 'string' && RECIPES[m.recipe] && m.status !== 'idle') queue.push({ recipe: m.recipe, readyAt: num(m.readyAt, 0) });
+    const slots = Math.max(1, Math.min(MACHINE_SLOTS_MAX, Math.floor(num(m.slots, 1))));
+    f.farm.machines[id] = { owned: m.owned === true, slots: Math.max(slots, queue.length), queue };
   }
   if (Array.isArray(farm.orders)) {
     f.farm.orders = farm.orders.slice(0, ORDER_COUNT).map((o: unknown) => {
@@ -159,6 +175,10 @@ export function loadFromSave(raw: Record<string, any>): void {
     }).filter((o: OrderState) => o.items.length > 0);
   }
   f.farm.orderSeq = Math.max(1, num(farm.orderSeq, 1));
+  for (const [key, v] of Object.entries(obj(farm.layout))) {
+    const o = obj(v);
+    if (/^(barn|silo|feedmill|bakery|coop|plot\d)$/.test(key) && Number.isInteger(o.a) && Number.isInteger(o.b)) f.farm.layout[key] = { a: o.a, b: o.b };
+  }
   const set = obj(hp.settings);
   f.settings = { sound: num(set.sound, 1), music: num(set.music, 1), haptic: num(set.haptic, 1) };
   f.lastSeen = num(hp.lastSeen, now());
@@ -173,7 +193,7 @@ function guardClock(): void {
     const shift = t - S.lastSeen;
     for (const p of S.farm.plots) if (p.readyAt) p.readyAt += shift;
     for (const c of S.farm.chickens) if (c.readyAt) c.readyAt += shift;
-    for (const m of Object.values(S.farm.machines)) if (m.readyAt) m.readyAt += shift;
+    for (const m of Object.values(S.farm.machines)) for (const j of m.queue) j.readyAt += shift;
   }
   S.lastSeen = t;
 }
@@ -221,12 +241,22 @@ function addCoin(delta: number): void {
   S.wallet.coin = Math.max(0, S.wallet.coin + delta);
   emit({ type: 'coin', delta });
 }
+function spendGems(n: number): boolean {
+  if (S.wallet.gem < n) return false;
+  S.wallet.gem -= n;
+  emit({ type: 'gem', delta: -n });
+  return true;
+}
 function addXp(delta: number): void {
   const before = farmLevel();
   S.progress.xp += delta;
   emit({ type: 'xp', delta });
   const after = farmLevel();
-  if (after > before) emit({ type: 'levelUp', level: after });
+  for (let lvl = before + 1; lvl <= after; lvl++) {
+    // A level that unlocks a crop gives CROP_GIFT of it to sow.
+    for (const c of Object.values(CROPS)) if (c.unlockLevel === lvl) addItem(c.id, CROP_GIFT);
+    emit({ type: 'levelUp', level: lvl });
+  }
 }
 function addItem(item: string, qty: number): void {
   const def = ITEMS[item];
@@ -246,13 +276,15 @@ function roomFor(item: string, qty: number): boolean {
 
 const secondsFor = (normal: number, tutorial: number): number => (tutorialActive() ? tutorial : normal);
 
-/** Advance every timer to `now()`: growing → ready, producing → ready, processing → output. */
+/** Advance every timer to `now()`: growing → ready, feeding → ready, a batch finishing. */
+let lastTick = 0;
 export function tick(): boolean {
   const t = now();
   let changed = false;
   for (const p of S.farm.plots) if (p.status === 'growing' && t >= p.readyAt) { p.status = 'ready'; changed = true; }
-  for (const c of S.farm.chickens) if (c.status === 'producing' && t >= c.readyAt) { c.status = 'ready'; changed = true; }
-  for (const m of Object.values(S.farm.machines)) if (m.status === 'processing' && t >= m.readyAt) { m.status = 'output'; changed = true; }
+  for (const c of S.farm.chickens) if (c.status === 'feeding' && t >= c.readyAt) { c.status = 'ready'; changed = true; }
+  for (const m of Object.values(S.farm.machines)) for (const j of m.queue) if (j.readyAt > lastTick && j.readyAt <= t) changed = true;
+  lastTick = t;
   if (changed) save();
   return changed;
 }
@@ -260,24 +292,35 @@ export function tick(): boolean {
 // ---------------------------------------------------------------------------
 // Farm actions. Each returns an error key ('' = ok) so the UI can toast it.
 
-export function buyPlot(i: number): string {
-  const p = S.farm.plots[i];
-  if (!p || p.status !== 'locked') return 'err_state';
+/** Front grid cell of a movable farm object (the player's layout, else the default; undefined if neither). */
+export const layoutOf = (key: string): { a: number; b: number } | undefined => S.farm.layout[key] ?? DEFAULT_LAYOUT[key];
+
+/** One more field (from farm level 2); the UI places it first, then calls this on ✓. */
+export function buyPlot(): string {
+  if (S.farm.plots.length >= maxPlots(farmLevel())) return farmLevel() < 2 ? 'err_level' : 'err_max';
   if (S.wallet.coin < PLOT_COST) return 'err_coin';
   addCoin(-PLOT_COST);
-  p.status = 'empty';
-  emit({ type: 'action', action: 'buyPlot', target: String(i) });
+  S.farm.plots.push({ status: 'empty', crop: null, readyAt: 0 });
+  emit({ type: 'action', action: 'buyPlot', target: String(S.farm.plots.length - 1) });
   save();
   return '';
 }
 
+/** Store a moved object's place (the UI has checked it is free). */
+export function setLayout(key: string, a: number, b: number): void {
+  S.farm.layout[key] = { a, b };
+  emit({ type: 'action', action: 'move', target: key });
+  save();
+}
+
+/** Sowing takes one unit of the crop from the silo; with none left nothing can be sown. */
 export function plantCrop(i: number, crop: string): string {
   const p = S.farm.plots[i];
   const c = CROPS[crop];
   if (!p || !c || p.status !== 'empty') return 'err_state';
   if (c.unlockLevel > farmLevel()) return 'err_level';
-  if (S.wallet.coin < c.seedCost) return 'err_coin';
-  addCoin(-c.seedCost);
+  if (count(crop) <= 0) return 'err_seed';
+  addItem(crop, -1);
   p.status = 'growing';
   p.crop = crop;
   p.readyAt = now() + secondsFor(c.growSeconds, c.tutorialSeconds) * 1000;
@@ -304,6 +347,7 @@ export function harvest(i: number): string {
 
 export function buyCoop(): string {
   if (S.farm.coopBuilt) return 'err_state';
+  if (farmLevel() < COOP_UNLOCK) return 'err_level';
   if (S.wallet.coin < COOP_COST) return 'err_coin';
   addCoin(-COOP_COST);
   S.farm.coopBuilt = true;
@@ -329,7 +373,7 @@ export function feedChicken(i: number): string {
   if (!c || c.status !== 'hungry') return 'err_state';
   if (count(a.feedItem) < a.feedQty) return 'err_no_feed';
   addItem(a.feedItem, -a.feedQty);
-  c.status = 'producing';
+  c.status = 'feeding';
   c.readyAt = now() + secondsFor(a.produceSeconds, a.tutorialSeconds) * 1000;
   emit({ type: 'action', action: 'feed', target: String(i) });
   save();
@@ -364,33 +408,63 @@ export function buyMachine(id: string): string {
   return '';
 }
 
+/** Finished batches (front of the queue) and the one now running, if any. */
+export function machineJobs(machineId: string): { done: MachineJob[]; running: MachineJob | null; waiting: MachineJob[] } {
+  const q = S.farm.machines[machineId]?.queue ?? [];
+  const t = now();
+  const done = q.filter((j) => j.readyAt <= t);
+  const pending = q.filter((j) => j.readyAt > t);
+  return { done, running: pending[0] ?? null, waiting: pending.slice(1) };
+}
+
+/** Queue a batch: inputs are consumed now, it starts when the batch before it ends. */
 export function startRecipe(machineId: string, recipeId: string): string {
   const m = S.farm.machines[machineId];
   const r = RECIPES[recipeId];
-  if (!m || !r || !m.owned || m.status !== 'idle' || r.machine !== machineId) return 'err_state';
+  if (!m || !r || !m.owned || r.machine !== machineId) return 'err_state';
   if (r.unlockLevel > farmLevel()) return 'err_level';
+  if (m.queue.length >= m.slots) return 'err_slots';
   for (const inp of r.inputs) if (count(inp.item) < inp.qty) return 'err_inputs';
   for (const inp of r.inputs) addItem(inp.item, -inp.qty); // inputs are consumed atomically at start
-  m.status = 'processing';
-  m.recipe = recipeId;
-  m.readyAt = now() + secondsFor(r.seconds, r.tutorialSeconds) * 1000;
+  const last = m.queue[m.queue.length - 1];
+  const start = Math.max(now(), last?.readyAt ?? 0);
+  m.queue.push({ recipe: recipeId, readyAt: start + secondsFor(r.seconds, r.tutorialSeconds) * 1000 });
   emit({ type: 'action', action: 'startRecipe', target: machineId });
   save();
   return '';
 }
 
-export function collectOutput(machineId: string): string {
+/** Collect every finished batch (in order) the barn has room for. Returns the items collected. */
+export function collectOutput(machineId: string): { err: string; got: { item: string; qty: number }[] } {
   const m = S.farm.machines[machineId];
-  if (!m || m.status !== 'output' || !m.recipe) return 'err_state';
-  const r = RECIPES[m.recipe];
-  if (!roomFor(r.output, r.outputQty)) { emit({ type: 'collectBlocked', storage: 'barn' }); return 'err_barn_full'; }
-  addItem(r.output, r.outputQty);
-  addXp(r.exp);
-  m.status = 'idle';
-  m.recipe = null;
-  m.readyAt = 0;
-  emit({ type: 'collected', item: r.output, qty: r.outputQty });
+  const got: { item: string; qty: number }[] = [];
+  if (!m) return { err: 'err_state', got };
+  let err = '';
+  while (m.queue.length && m.queue[0].readyAt <= now()) {
+    const r = RECIPES[m.queue[0].recipe];
+    if (!roomFor(r.output, r.outputQty)) { emit({ type: 'collectBlocked', storage: ITEMS[r.output].storage as StorageType }); err = 'err_barn_full'; break; }
+    m.queue.shift();
+    addItem(r.output, r.outputQty);
+    addXp(r.exp);
+    got.push({ item: r.output, qty: r.outputQty });
+    emit({ type: 'collected', item: r.output, qty: r.outputQty });
+  }
+  if (!got.length) return { err: err || 'err_state', got };
   emit({ type: 'action', action: 'collectOutput', target: machineId });
+  save();
+  return { err: '', got };
+}
+
+/** Buy one more production slot: MACHINE_SLOT_BASE × 3^(slots − 1) coins. */
+export function buySlot(machineId: string): string {
+  const m = S.farm.machines[machineId];
+  if (!m || !m.owned) return 'err_state';
+  if (m.slots >= MACHINE_SLOTS_MAX) return 'err_max';
+  const price = slotPrice(m.slots);
+  if (S.wallet.coin < price) return 'err_coin';
+  addCoin(-price);
+  m.slots += 1;
+  emit({ type: 'action', action: 'buySlot', target: machineId });
   save();
   return '';
 }
@@ -551,10 +625,20 @@ export function upgradeStorage(t: StorageType): string {
 // ---------------------------------------------------------------------------
 // Tutorial-only grants
 
-export function tutorialGrantFeed(): void {
-  if (S.tutorial.feedGranted) return;
-  S.tutorial.feedGranted = true;
-  if (roomFor('feed', 1)) addItem('feed', 1);
+/** After the first harvest → Match-3 → upgrade lesson the farm reaches level 2 (corn, +3 fields). */
+export function tutorialGrantLevel(level: number): void {
+  if (S.tutorial.levelGranted) return;
+  S.tutorial.levelGranted = true;
+  const need = XP_THRESHOLDS[level] ?? 0;
+  if (S.progress.xp < need) addXp(need - S.progress.xp);
+  save();
+}
+
+/** The first sowing lesson: a few wheat to drag onto the plots (once per save). */
+export function tutorialGrantSeeds(): void {
+  if (S.tutorial.seedsGranted) return;
+  S.tutorial.seedsGranted = true;
+  addItem('wheat', Math.min(TUTORIAL_START.starterWheat, free('silo')));
   save();
 }
 
@@ -567,4 +651,63 @@ export function setTutorialStep(id: string): void {
 export function setSetting(key: 'sound' | 'music' | 'haptic', on: boolean): void {
   S.settings[key] = on ? 1 : 0;
   save();
+}
+
+// ---------------------------------------------------------------------------
+// Gems: buy a crop the silo is out of, or finish a timer at once.
+
+/** +1 of a crop for CROP_GEM_PRICE gems (only when the silo has none of it). */
+export function buyCropWithGems(crop: string): string {
+  const c = CROPS[crop];
+  if (!c || count(crop) > 0) return 'err_state';
+  if (c.unlockLevel > farmLevel()) return 'err_level';
+  if (!roomFor(crop, 1)) { emit({ type: 'collectBlocked', storage: 'silo' }); return 'err_silo_full'; }
+  if (!spendGems(CROP_GEM_PRICE)) return 'err_gem';
+  addItem(crop, 1);
+  emit({ type: 'action', action: 'gemCrop', target: crop });
+  save();
+  return '';
+}
+
+/** Gems to finish a growing field now. */
+export const plotSkipCost = (i: number): number => gemsFor(S.farm.plots[i].readyAt - now());
+export function skipPlot(i: number): string {
+  const p = S.farm.plots[i];
+  if (!p || p.status !== 'growing') return 'err_state';
+  if (!spendGems(plotSkipCost(i))) return 'err_gem';
+  p.readyAt = now();
+  p.status = 'ready';
+  emit({ type: 'action', action: 'gemSkip', target: `plot${i}` });
+  save();
+  return '';
+}
+
+/** Gems to have every eating chicken lay now (each chicken priced on its own time left). */
+export const chickensSkipCost = (): number =>
+  S.farm.chickens.filter((c) => c.status === 'feeding').reduce((n, c) => n + gemsFor(c.readyAt - now()), 0);
+export function skipChickens(): string {
+  const eating = S.farm.chickens.filter((c) => c.status === 'feeding');
+  if (!eating.length) return 'err_state';
+  if (!spendGems(chickensSkipCost())) return 'err_gem';
+  for (const c of eating) { c.readyAt = now(); c.status = 'ready'; }
+  emit({ type: 'action', action: 'gemSkip', target: 'chickens' });
+  save();
+  return '';
+}
+
+/** Gems to finish a machine's running batch now; the batches queued after it move up. */
+export function machineSkipCost(machineId: string): number {
+  const run = machineJobs(machineId).running;
+  return run ? gemsFor(run.readyAt - now()) : 0;
+}
+export function skipMachine(machineId: string): string {
+  const m = S.farm.machines[machineId];
+  const run = machineJobs(machineId).running;
+  if (!m || !run) return 'err_state';
+  if (!spendGems(machineSkipCost(machineId))) return 'err_gem';
+  const saved = run.readyAt - now();
+  for (const j of m.queue) if (j.readyAt >= run.readyAt) j.readyAt -= saved;
+  emit({ type: 'action', action: 'gemSkip', target: machineId });
+  save();
+  return '';
 }

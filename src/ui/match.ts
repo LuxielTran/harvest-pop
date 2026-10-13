@@ -41,7 +41,7 @@ const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)
 const SPRITES: Record<string, string> = {
   ...A.TILE_ART, rainbow: A.RAINBOW_SEED, chick: A.CHICK_TILE, piglet: A.PIGLET_TILE,
   stripe_row: A.STRIPE_ROW, stripe_col: A.STRIPE_COL, mud: A.MUD_TILE, crate2: A.CRATE_TILE, crate1: A.CRATE_CRACKED,
-  soil: A.SOIL_TILE, soilicon: A.ICON_SOIL, tractor: A.ICON_TRACTOR, shovel: A.ICON_SHOVEL, witch: A.ICON_WITCH, basket: A.ICON_BASKET,
+  soil: A.SOIL_TILE, soilicon: A.ICON_SOIL, tractor: A.ICON_TRACTOR, shovel: A.ICON_SHOVEL, witch: A.ICON_WITCH, basket: A.ICON_ANY_GOAL,
   haybale: A.HAYBALE_WRAP, beebadge: A.BEE_BADGE, bee: A.BEE, hive: A.ICON_BEEHIVE, hand: A.ICON_HAND,
 };
 
