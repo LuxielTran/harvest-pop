@@ -1,8 +1,11 @@
 // Match-3 engine (pure logic, no DOM). Boards up to 9×9 of any shape, with
 //   • cropsies (3–5 kinds per level), swap-only-if-match, cascades;
-//   • power-ups: 4 in a line → Tractor Cropsy (clears a row or a column),
-//     5 in a line → Rainbow Seed (swap it with a cropsy to clear every one of
-//     that kind); they also appear from cascades and, rarely, from the drop;
+//   • power-ups, by precedence (Candy Crush rules):
+//       5 in a line        → Rainbow Seed (swap it with a cropsy: clears every one of that kind)
+//       T / L intersection → Hay Bale Cropsy (bursts a 3×3 patch; breaks 2 blocker layers per hit)
+//       4 in a line        → Tractor Cropsy (clears a row or a column)
+//       2×2 square         → Busy Bee (flies to 3 priority targets, can plow soil under blockers)
+//     They also appear from cascades, rarely from the drop, and Bees from beehive spawners;
 //   • blockers: Mud (1 layer), Wooden Crate (2 layers) — hit by matches next to
 //     them, by blasts through them and by boosters;
 //   • Soil under cells, plowed when a cropsy on it is cleared;
@@ -12,13 +15,17 @@
 
 import { goalNeed, type GoalDef, type MatchLevelConfig, type TileKind } from './config';
 
-export type Special = 'row' | 'col' | 'rainbow' | null;
+export type Special = 'row' | 'col' | 'rainbow' | 'wrap' | 'bee' | null;
 export interface Tile { id: number; kind: string; special: Special; animal: boolean; }
 export interface Pos { r: number; c: number; }
 export interface Move { a: Pos; b: Pos; }
 export interface Blocker { type: 'mud' | 'crate'; hp: number; }
-export interface Hit { pos: Pos; power?: 'all'; }
-export interface Blast { type: 'row' | 'col' | 'rainbow' | 'cross'; pos: Pos; targets?: Pos[]; }
+/**
+ * A hit on a cell. `power` = blocker layers removed ('all' = the whole blocker; default 1).
+ * `under` = a Bee hit: on soil hidden under a blocker it plows the soil and leaves the blocker.
+ */
+export interface Hit { pos: Pos; power?: 'all' | 2; under?: boolean; }
+export interface Blast { type: 'row' | 'col' | 'rainbow' | 'cross' | 'wrap' | 'bigwrap' | 'bigcross' | 'bee'; pos: Pos; targets?: Pos[]; }
 export interface StepCtx { swap?: [Pos, Pos]; hits?: Hit[]; consumed?: Pos[]; blasts?: Blast[]; }
 export interface StepResult {
   cleared: { pos: Pos; tile: Tile }[];
@@ -29,6 +36,9 @@ export interface StepResult {
 }
 export interface Fall { tile: Tile; path: Pos[]; spawned: boolean; }
 interface Run { dir: 'h' | 'v'; kind: string; cells: Pos[]; }
+
+/** Chance per drop that a beehive column sends a Busy Bee. */
+export const HIVE_CHANCE = 0.08;
 
 export class Rng {
   s: number;
@@ -63,9 +73,17 @@ export class Board {
   animalsPending: number;
   exitDist: number[][];
   animalSpawnDist = 0;
+  /** Columns topped by a beehive: they sometimes drop a Busy Bee. */
+  hives: Set<number>;
+  /** What the level asks for (Bees aim at it). */
+  goalKinds: Set<string>;
+  goalTypes: Set<string>;
 
   constructor(cfg: MatchLevelConfig, seedOffset = 0) {
     this.rng = new Rng(cfg.seed + seedOffset);
+    this.hives = new Set(cfg.hives ?? []);
+    this.goalKinds = new Set(cfg.goals.flatMap((g) => (g.type === 'collect' ? [g.tile] : [])));
+    this.goalTypes = new Set(cfg.goals.map((g) => g.type));
     this.rows = cfg.map.length;
     this.cols = Math.max(...cfg.map.map((r) => r.length));
     this.kinds = cfg.colors.slice();
@@ -149,6 +167,12 @@ export class Board {
     return this.kinds[this.kinds.length - 1];
   }
 
+  countSpecial(special: Special): number {
+    let n = 0;
+    for (const row of this.grid) for (const t of row) if (t?.special === special) n++;
+    return n;
+  }
+
   countAnimals(): number {
     let n = 0;
     for (const row of this.grid) for (const t of row) if (t?.animal) n++;
@@ -156,7 +180,7 @@ export class Board {
   }
 
   /** What falls in from the top: an animal when one is due, otherwise a cropsy (rarely a Tractor Cropsy). */
-  private spawnTile(allowAnimal: boolean): Tile {
+  private spawnTile(allowAnimal: boolean, hive: boolean): Tile {
     if (allowAnimal && this.animalKind && this.animalsPending > 0) {
       const on = this.countAnimals();
       if (on === 0 || (on < 2 && this.rng.next() < 0.12)) {
@@ -165,6 +189,8 @@ export class Board {
       }
     }
     const kind = this.randomKind();
+    // A beehive column sometimes drops a Busy Bee (at most 2 on the board).
+    if (hive && this.countSpecial('bee') < 2 && this.rng.next() < HIVE_CHANCE) return this.newTile(kind, 'bee');
     if (this.powerChance > 0 && this.rng.next() < this.powerChance) return this.newTile(kind, this.rng.next() < 0.5 ? 'row' : 'col');
     return this.newTile(kind);
   }
@@ -182,6 +208,8 @@ export class Board {
         if (matchable(l1) && matchable(l2) && l1.kind === l2.kind) ex.add(l1.kind);
         const u1 = this.at(r - 1, c), u2 = this.at(r - 2, c);
         if (matchable(u1) && matchable(u2) && u1.kind === u2.kind) ex.add(u1.kind);
+        const d = this.at(r - 1, c - 1);
+        if (matchable(u1) && matchable(l1) && matchable(d) && u1.kind === l1.kind && d.kind === l1.kind) ex.add(l1.kind);
         this.grid[r][c] = this.newTile(this.randomKind(ex));
       }
       if (this.legalMoves().length > 0) return;
@@ -218,7 +246,33 @@ export class Board {
     return runs;
   }
 
-  hasMatches(): boolean { return this.findRuns().length > 0; }
+  /** Every 2×2 block of one kind (top-left cell first). */
+  private findSquares(): Pos[][] {
+    const out: Pos[][] = [];
+    for (let r = 0; r + 1 < this.rows; r++) for (let c = 0; c + 1 < this.cols; c++) {
+      const cells = [{ r, c }, { r, c: c + 1 }, { r: r + 1, c }, { r: r + 1, c: c + 1 }];
+      const t = this.at(r, c);
+      if (matchable(t) && cells.every((p) => { const u = this.at(p.r, p.c); return matchable(u) && u.kind === t.kind; })) out.push(cells);
+    }
+    return out;
+  }
+
+  private squareAt(r: number, c: number): boolean {
+    const t = this.at(r, c);
+    if (!matchable(t)) return false;
+    for (const [dr, dc] of [[-1, -1], [-1, 0], [0, -1], [0, 0]]) {
+      const r0 = r + dr, c0 = c + dc;
+      let ok = true;
+      for (const [er, ec] of [[0, 0], [0, 1], [1, 0], [1, 1]]) {
+        const u = this.at(r0 + er, c0 + ec);
+        if (!matchable(u) || u.kind !== t.kind) { ok = false; break; }
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
+
+  hasMatches(): boolean { return this.findRuns().length > 0 || this.findSquares().length > 0; }
 
   private matchAt(r: number, c: number): boolean {
     const t = this.at(r, c);
@@ -254,7 +308,7 @@ export class Board {
     if (ta.special === 'rainbow' || tb.special === 'rainbow') return !ta.animal && !tb.animal;
     if (ta.special && tb.special) return true;
     this.swap(a, b);
-    const ok = this.matchAt(a.r, a.c) || this.matchAt(b.r, b.c);
+    const ok = this.matchAt(a.r, a.c) || this.matchAt(b.r, b.c) || this.squareAt(a.r, a.c) || this.squareAt(b.r, b.c);
     this.swap(a, b);
     return ok;
   }
@@ -289,38 +343,85 @@ export class Board {
   beginSwap(a: Pos, b: Pos): StepCtx {
     this.swap(a, b);
     const ta = this.grid[a.r][a.c]!, tb = this.grid[b.r][b.c]!;
-    const rbA = ta.special === 'rainbow', rbB = tb.special === 'rainbow';
+    const sa = ta.special, sb = tb.special;
     const swapPair: [Pos, Pos] = [a, b];
-    if (rbA && rbB) {
+    const all = (): Hit[] => {
       const hits: Hit[] = [];
       for (let r = 0; r < this.rows; r++) for (let c = 0; c < this.cols; c++) if (this.mask[r][c]) hits.push({ pos: { r, c } });
+      return hits;
+    };
+    if (sa === 'rainbow' && sb === 'rainbow') {
+      const hits = all();
       return { swap: swapPair, hits, consumed: [a, b], blasts: [{ type: 'rainbow', pos: b, targets: hits.map((h) => h.pos) }] };
     }
-    if (rbA || rbB) {
-      const seed = rbA ? a : b, other = rbA ? tb : ta;
+    if (sa === 'rainbow' || sb === 'rainbow') {
+      const seed = sa === 'rainbow' ? a : b, other = sa === 'rainbow' ? tb : ta;
       const targets = this.tilesOfKind(other.kind);
       return { swap: swapPair, hits: targets.map((pos) => ({ pos })), consumed: [seed], blasts: [{ type: 'rainbow', pos: seed, targets }] };
     }
-    if (ta.special && tb.special) {
-      const hits: Hit[] = [];
-      for (let c = 0; c < this.cols; c++) hits.push({ pos: { r: b.r, c } });
-      for (let r = 0; r < this.rows; r++) hits.push({ pos: { r, c: b.c } });
-      return { swap: swapPair, hits, consumed: [a, b], blasts: [{ type: 'cross', pos: b }] };
+    if (!sa || !sb) return { swap: swapPair };
+    const line = (s: Special): boolean => s === 'row' || s === 'col';
+    const rows = (r0: number, r1: number): Hit[] => {
+      const h: Hit[] = [];
+      for (let r = r0; r <= r1; r++) for (let c = 0; c < this.cols; c++) h.push({ pos: { r, c } });
+      return h;
+    };
+    const cols = (c0: number, c1: number): Hit[] => {
+      const h: Hit[] = [];
+      for (let c = c0; c <= c1; c++) for (let r = 0; r < this.rows; r++) h.push({ pos: { r, c } });
+      return h;
+    };
+    if (line(sa) && line(sb)) {
+      return { swap: swapPair, hits: [...rows(b.r, b.r), ...cols(b.c, b.c)], consumed: [a, b], blasts: [{ type: 'cross', pos: b }] };
     }
-    return { swap: swapPair };
+    if ((sa === 'wrap' && line(sb)) || (sb === 'wrap' && line(sa))) {
+      // Hay Bale + Tractor: three rows and three columns.
+      return { swap: swapPair, hits: [...rows(b.r - 1, b.r + 1), ...cols(b.c - 1, b.c + 1)], consumed: [a, b], blasts: [{ type: 'bigcross', pos: b }] };
+    }
+    if (sa === 'wrap' && sb === 'wrap') {
+      const hits: Hit[] = [];
+      for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) hits.push({ pos: { r: b.r + dr, c: b.c + dc }, power: 2 });
+      return { swap: swapPair, hits, consumed: [a, b], blasts: [{ type: 'bigwrap', pos: b }] };
+    }
+    // Any pair with a Busy Bee: both fire where they stand.
+    return { swap: swapPair, hits: [{ pos: a }, { pos: b }] };
+  }
+
+  /** Busy Bee targets: soil first (also under blockers), then goal blockers, goal cropsies, any blocker, any cropsy. */
+  private beeTargets(n: number, from: Pos, taken: Set<number>): Pos[] {
+    const C = this.cols;
+    const tiers: Pos[][] = [[], [], [], [], []];
+    for (let r = 0; r < this.rows; r++) for (let c = 0; c < C; c++) {
+      if (!this.mask[r][c] || (r === from.r && c === from.c) || taken.has(r * C + c)) continue;
+      const b = this.block[r][c];
+      const t = this.grid[r][c];
+      if (this.soil[r][c] && this.goalTypes.has('soil')) tiers[0].push({ r, c });
+      else if (b && this.goalTypes.has(b.type)) tiers[1].push({ r, c });
+      else if (matchable(t) && (this.goalKinds.has(t.kind) || this.goalKinds.has('any'))) tiers[2].push({ r, c });
+      else if (b) tiers[3].push({ r, c });
+      else if (matchable(t)) tiers[4].push({ r, c });
+    }
+    const out: Pos[] = [];
+    for (const tier of tiers) {
+      while (tier.length && out.length < n) out.push(tier.splice(Math.floor(this.rng.next() * tier.length), 1)[0]);
+      if (out.length >= n) break;
+    }
+    return out;
   }
 
   // -------------------------------------------------------------------------
-  // One clear step: lines → power-ups made → blasts chained → blockers hit → soil plowed
+  // One clear step: lines and squares → power-ups made → blasts chained → blockers hit → soil plowed
 
   step(ctx: StepCtx = {}): StepResult | null {
     const res: StepResult = { cleared: [], created: [], blasts: [...(ctx.blasts ?? [])], blockers: [], plowed: [] };
     const C = this.cols;
     const key = (p: Pos): number => p.r * C + p.c;
     const pos = (k: number): Pos => ({ r: Math.floor(k / C), c: k % C });
+    const same = (p: Pos, q: Pos): boolean => p.r === q.r && p.c === q.c;
     const clear = new Set<number>();
     const fired = new Set<number>();
-    const blockHit = new Map<number, 'one' | 'all'>();
+    const blockHit = new Map<number, number>();
+    const plowUnder = new Set<number>();
     const creations = new Map<number, { pos: Pos; tile: Tile; from: Tile }>();
 
     for (const p of ctx.consumed ?? []) {
@@ -328,39 +429,82 @@ export class Board {
       if (t) { fired.add(t.id); clear.add(key(p)); }
     }
 
-    // Lines, and the power-ups the long ones grow.
+    // Lines and squares, and the power-ups they grow (Rainbow > Hay Bale > Tractor > Bee).
     const runs = this.findRuns().sort((x, y) => y.cells.length - x.cells.length);
+    const squares = this.findSquares();
     const claimed = new Set<number>();
+    const swapPrefs = (ctx.swap ?? []).slice().reverse();
+    const plain = (p: Pos): boolean => !this.grid[p.r][p.c]!.special && !creations.has(key(p));
+    const pickAt = (cells: Pos[], prefer?: Pos): Pos | null => {
+      const s = swapPrefs.find((q) => cells.some((p) => same(p, q)) && plain(q));
+      if (s) return s;
+      if (prefer && plain(prefer)) return prefer;
+      const free = cells.filter(plain);
+      return free.length ? free[Math.floor(this.rng.next() * free.length)] : null;
+    };
+    const make = (at: Pos, special: Special, kind: string): void => {
+      creations.set(key(at), { pos: at, tile: this.newTile(special === 'rainbow' ? 'rainbow' : kind, special), from: this.grid[at.r][at.c]! });
+    };
+    const isClaimed = (cells: Pos[]): boolean => cells.some((p) => claimed.has(key(p)));
+    const claim = (cells: Pos[]): void => { for (const p of cells) claimed.add(key(p)); };
+    const crossing = (x: Run, y: Run): Pos | null => x.cells.find((p) => y.cells.some((q) => same(p, q))) ?? null;
     for (const run of runs) {
-      if (run.cells.length < 4 || run.cells.some((p) => claimed.has(key(p)))) continue;
-      const inRun = (s: Pos): boolean => run.cells.some((p) => p.r === s.r && p.c === s.c);
-      const plain = (p: Pos): boolean => !this.grid[p.r][p.c]!.special;
-      let at = (ctx.swap ?? []).slice().reverse().find((s) => inRun(s) && plain(s));
-      if (!at) {
-        const free = run.cells.filter(plain);
-        if (!free.length) continue;
-        at = free[Math.floor(this.rng.next() * free.length)];
-      }
-      const special: Special = run.cells.length >= 5 ? 'rainbow' : run.dir === 'h' ? 'col' : 'row';
-      const tile = this.newTile(special === 'rainbow' ? 'rainbow' : run.kind, special);
-      creations.set(key(at), { pos: at, tile, from: this.grid[at.r][at.c]! });
-      for (const p of run.cells) claimed.add(key(p));
+      if (run.cells.length < 5 || isClaimed(run.cells)) continue;
+      const at = pickAt(run.cells, run.cells[2]);
+      if (!at) continue;
+      make(at, 'rainbow', run.kind);
+      claim(run.cells);
+      for (const o of runs) if (o !== run && crossing(run, o)) claim(o.cells);
     }
-    for (const run of runs) for (const p of run.cells) if (!creations.has(key(p))) clear.add(key(p));
+    for (const h of runs) {
+      if (h.dir !== 'h' || isClaimed(h.cells)) continue;
+      for (const v of runs) {
+        if (v.dir !== 'v' || v.kind !== h.kind || isClaimed(v.cells)) continue;
+        const x = crossing(h, v);
+        if (!x) continue;
+        const at = pickAt([...h.cells, ...v.cells], x);
+        if (!at) continue;
+        make(at, 'wrap', h.kind);
+        claim(h.cells);
+        claim(v.cells);
+        break;
+      }
+    }
+    for (const run of runs) {
+      if (run.cells.length !== 4 || isClaimed(run.cells)) continue;
+      const at = pickAt(run.cells);
+      if (!at) continue;
+      make(at, run.dir === 'h' ? 'col' : 'row', run.kind);
+      claim(run.cells);
+    }
+    const squareCells: Pos[] = [];
+    for (const sq of squares) {
+      if (isClaimed(sq)) continue;
+      const at = pickAt(sq);
+      if (!at) continue;
+      make(at, 'bee', this.grid[at.r][at.c]!.kind);
+      claim(sq);
+      squareCells.push(...sq);
+    }
+    for (const p of [...runs.flatMap((r) => r.cells), ...squareCells]) if (!creations.has(key(p))) clear.add(key(p));
 
-    const hit = (p: Pos, power?: 'all'): void => {
+    const hit = (p: Pos, power?: 'all' | 2, under = false): void => {
       if (!this.inBounds(p.r, p.c) || !this.mask[p.r][p.c]) return;
       const k = key(p);
       if (this.block[p.r][p.c]) {
-        if (power === 'all') blockHit.set(k, 'all');
-        else if (!blockHit.has(k)) blockHit.set(k, 'one');
+        if (under && this.soil[p.r][p.c]) { plowUnder.add(k); return; }
+        const dmg = power === 'all' ? 99 : power ?? 1;
+        blockHit.set(k, Math.max(blockHit.get(k) ?? 0, dmg));
         return;
       }
       const t = this.grid[p.r][p.c];
-      if (!t || t.animal || creations.has(k)) return;
+      if (!t || t.animal || creations.has(k)) {
+        if (under && !t && this.soil[p.r][p.c]) plowUnder.add(k);
+        return;
+      }
       clear.add(k);
     };
-    for (const h of ctx.hits ?? []) hit(h.pos, h.power);
+    for (const h of ctx.hits ?? []) hit(h.pos, h.power, h.under);
 
     // Every power-up caught in the clear fires, and may catch more.
     for (let grew = true; grew;) {
@@ -373,7 +517,14 @@ export class Board {
         grew = true;
         if (t.special === 'row') { res.blasts.push({ type: 'row', pos: p }); for (let c = 0; c < C; c++) hit({ r: p.r, c }); }
         else if (t.special === 'col') { res.blasts.push({ type: 'col', pos: p }); for (let r = 0; r < this.rows; r++) hit({ r, c: p.c }); }
-        else {
+        else if (t.special === 'wrap') {
+          res.blasts.push({ type: 'wrap', pos: p });
+          for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) hit({ r: p.r + dr, c: p.c + dc }, 2);
+        } else if (t.special === 'bee') {
+          const targets = this.beeTargets(3, p, clear);
+          res.blasts.push({ type: 'bee', pos: p, targets });
+          for (const q of targets) hit(q, undefined, true);
+        } else {
           const targets = this.tilesOfKind(this.commonKind());
           res.blasts.push({ type: 'rainbow', pos: p, targets });
           for (const q of targets) hit(q);
@@ -395,22 +546,26 @@ export class Board {
       res.created.push(cr);
       touched.push(cr.pos);
     }
+    for (const k of plowUnder) {
+      const p = pos(k);
+      if (this.soil[p.r][p.c]) { this.soil[p.r][p.c] = false; res.plowed.push(p); }
+    }
     for (const p of touched) {
       if (this.soil[p.r][p.c]) { this.soil[p.r][p.c] = false; res.plowed.push(p); }
       for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const q = { r: p.r + dr, c: p.c + dc };
-        if (this.inBounds(q.r, q.c) && this.block[q.r][q.c] && !blockHit.has(key(q))) blockHit.set(key(q), 'one');
+        if (this.inBounds(q.r, q.c) && this.block[q.r][q.c] && !blockHit.has(key(q))) blockHit.set(key(q), 1);
       }
     }
-    for (const [k, power] of blockHit) {
+    for (const [k, dmg] of blockHit) {
       const p = pos(k);
       const b = this.block[p.r][p.c];
       if (!b) continue;
-      const hp = power === 'all' ? 0 : b.hp - 1;
+      const hp = Math.max(0, b.hp - dmg);
       res.blockers.push({ pos: p, type: b.type, hp });
       this.block[p.r][p.c] = hp > 0 ? { type: b.type, hp } : null;
     }
-    if (!res.cleared.length && !res.created.length && !res.blockers.length && !res.blasts.length) return null;
+    if (!res.cleared.length && !res.created.length && !res.blockers.length && !res.blasts.length && !res.plowed.length) return null;
     return res;
   }
 
@@ -456,7 +611,7 @@ export class Board {
       for (const s of this.spawners) {
         if (!this.open(s.r, s.c) || this.grid[s.r][s.c]) continue;
         // Animals drop in only from the columns nearest an exit (like Candy Crush's ingredient spawners).
-        const t = this.spawnTile(this.exitDist[s.r][s.c] <= this.animalSpawnDist);
+        const t = this.spawnTile(this.exitDist[s.r][s.c] <= this.animalSpawnDist, this.hives.has(s.c));
         this.grid[s.r][s.c] = t;
         const n = spawnedIn[s.c]++;
         rec(t, { r: s.r - 1 - n, c: s.c }, s, true);
@@ -493,7 +648,7 @@ export class Board {
       const t = this.at(r, c);
       if (t && !t.animal) { cells.push({ r, c }); tiles.push(t); }
     }
-    const ok = (): boolean => this.findRuns().length === 0 && this.legalMoves().length > 0;
+    const ok = (): boolean => !this.hasMatches() && this.legalMoves().length > 0;
     for (let attempt = 0; attempt < 200; attempt++) {
       for (let i = tiles.length - 1; i > 0; i--) {
         const j = Math.floor(this.rng.next() * (i + 1));
@@ -592,7 +747,7 @@ export function scoreTurn(after: Board, goals: GoalProgress[], steps: StepResult
     }
     for (const b of res.blockers) s += open(b.type) ? (b.hp <= 0 ? 4 : 2.5) : 0.6;
     if (open('soil')) s += res.plowed.length * 3;
-    for (const c of res.created) s += c.tile.special === 'rainbow' ? 4 : 2;
+    for (const c of res.created) s += c.tile.special === 'rainbow' ? 4 : c.tile.special === 'wrap' ? 3 : 2;
   }
   if (open('animal')) {
     s += animalsOut * 25;

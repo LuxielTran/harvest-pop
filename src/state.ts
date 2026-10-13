@@ -6,7 +6,7 @@ import FalconSDK from '@falcongames/game-client-sdk';
 import {
   ANIMALS, BOOSTERS, CHICKEN_COST, COOP_UNLOCK, CROP_GIFT, COOP_CAPACITY, COOP_COST, CROPS, DEFAULT_LAYOUT, ITEMS, MACHINES, MACHINE_SLOTS_MAX, MATERIAL_PRICE, ORDER_BONUS,
   ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOTS_MAX, PLOTS_START, RECIPES, REPLAY_COINS, REVIVE_PRICE, STORAGE_START,
-  CROP_GEM_PRICE, GEM_START, STORAGE_UPGRADES, TUTORIAL_START, WIN_COINS, gemsFor, XP_THRESHOLDS, farmLevelForXp, maxPlots, slotPrice, type StorageType, type StorageUpgrade,
+  CROP_GEM_PRICE, GEM_START, MATCH_LEVELS, STORAGE_UPGRADES, TUTORIAL_START, gemsFor, XP_THRESHOLDS, farmLevelForXp, maxPlots, slotPrice, winCoins, type StorageType, type StorageUpgrade,
 } from './config';
 
 export type PlotStatus = 'empty' | 'growing' | 'ready';
@@ -29,6 +29,8 @@ export interface SaveData {
   match: { bestStars: Record<string, number> };
   /** Booster units owned, by booster key. */
   boosters: Record<string, number>;
+  /** First-time match tutorials already shown (key → 1). */
+  tips: Record<string, number>;
   tutorial: { stepId: string; seedsGranted: boolean; levelGranted: boolean; bonusStars: number };
   farm: {
     plots: PlotState[];
@@ -78,6 +80,7 @@ function freshSave(): SaveData {
     upgradeWallet: {},
     match: { bestStars: {} },
     boosters: {},
+    tips: {},
     tutorial: { stepId: 'T00', seedsGranted: false, levelGranted: false, bonusStars: 0 },
     farm: {
       plots: Array.from({ length: PLOTS_START }, () => ({ status: 'empty' as PlotStatus, crop: null, readyAt: 0 })),
@@ -127,6 +130,7 @@ export function loadFromSave(raw: Record<string, any>): void {
   f.upgradeWallet = numMap(hp.upgradeWallet);
   f.match.bestStars = numMap(obj(hp.match).bestStars);
   f.boosters = numMap(hp.boosters);
+  f.tips = numMap(hp.tips);
   const tut = obj(hp.tutorial);
   f.tutorial.stepId = typeof tut.stepId === 'string' ? tut.stepId : 'T00';
   f.tutorial.levelGranted = tut.levelGranted === true;
@@ -515,8 +519,9 @@ export function skipOrder(id: number): void {
 // Match-3 stars, Upgrade Shop and storage upgrades
 
 /**
- * CompleteMatch: credit only the improvement over the best stars of that level,
- * plus the coin reward (WIN_COINS on a first clear, REPLAY_COINS after that).
+ * CompleteMatch: credit only the improvement over the best stars of that level.
+ * Coins follow the star table of the level's difficulty (20/40/80, or 40/80/160 on
+ * hard levels); a replay pays the difference when it beats the best stars, else REPLAY_COINS.
  */
 export function completeMatch(levelId: number, stars: number): { stars: number; coins: number } {
   const key = String(levelId);
@@ -525,7 +530,8 @@ export function completeMatch(levelId: number, stars: number): { stars: number; 
   S.match.bestStars[key] = Math.max(old, stars);
   S.wallet.star += delta;
   if (delta > 0) emit({ type: 'star', delta });
-  const coins = old === 0 ? WIN_COINS : REPLAY_COINS;
+  const diff = MATCH_LEVELS.find((l) => l.id === levelId)?.difficulty ?? 'normal';
+  const coins = stars > old ? winCoins(diff, stars) - winCoins(diff, old) : REPLAY_COINS;
   addCoin(coins);
   save();
   return { stars: delta, coins };
@@ -535,6 +541,20 @@ export function completeMatch(levelId: number, stars: number): { stars: number; 
 // Boosters and the paid revive (coins are the game's own wallet)
 
 export const boosterCount = (key: string): number => S.boosters[key] ?? 0;
+
+/** A free unit, given when a booster is first taught. */
+export function grantBooster(key: string, n = 1): void {
+  S.boosters[key] = boosterCount(key) + n;
+  save();
+}
+
+/** First-time tutorials the player has already seen. */
+export const tipSeen = (key: string): boolean => S.tips[key] === 1;
+export function markTip(key: string): void {
+  if (tipSeen(key)) return;
+  S.tips[key] = 1;
+  save();
+}
 
 export function buyBooster(key: string): string {
   const def = BOOSTERS.find((b) => b.key === key);
