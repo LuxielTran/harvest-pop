@@ -21,7 +21,7 @@ npm run build    # dist/index.html — một tệp duy nhất
 | `src/tutorial.ts` | TutorialDirector T00→T12 (bắt buộc, resume theo save, chặn thao tác ngoài bước) |
 | `src/ui/farm.ts` | Farm Home: scene 2.5D, HUD, Shop (kể cả 3 booster), Kho/nâng kho, Upgrade Shop, Đơn hàng, Map 50 màn (tag Khó/Siêu khó/Trùm), Cài đặt |
 | `src/ui/match.ts` | Màn Match-3 (canvas, khay gỗ 2.5D): HUD lượt / tối đa 3 mục tiêu / sao, hiệu ứng power-up, thanh 3 booster, popup kết quả |
-| `src/art.ts` | Toàn bộ art SVG gốc: công trình 2.5D, 7 cropsy, Cropsy Máy Cày, Hạt Cầu Vồng, bùn, thùng (nguyên / nứt), đất, gà con, heo con, icon booster |
+| `src/art.ts` | Toàn bộ art SVG gốc: công trình 2.5D, 9 cropsy (táo hồng, dâu đỏ, cà tím, bắp cải băng…), Cropsy Máy Cày, Hạt Cầu Vồng, bùn, thùng (nguyên / nứt), đất, gà con, heo con, icon booster |
 | `src/game.ts` | Hợp đồng `FalconGame`: `startLevel(i)` mở thẳng màn Match i, `levelStart` (kèm `difficulty`) / `win` / `lose`, pause/resume/revive, `boosters` |
 | `LEVELS.md` | Bảng 50 màn: độ khó, số loại cropsy, lưới, lượt, mục tiêu và tỉ lệ thắng của bot |
 
@@ -65,6 +65,34 @@ thích), rồi **dẫn tay** lần dùng đầu tiên. Mỗi tutorial chỉ hi�
 | 4 / 12 / 14 / 22 | Bùn / Thùng gỗ / Đất / Đất dưới thùng | khoanh các ô đó + bàn tay chỉ một nước tốt |
 | 6 / 13 / 50 | Gà con / Heo con / mục tiêu "cropsy bất kỳ" | khoanh thú + nước gợi ý |
 | 5 / 8 / 10 | Xẻng vàng / Móng ngựa / Quả Phù Thủy | **tặng 1 cái**, bàn tay chỉ nút booster, rồi chỉ ô dùng tốt nhất |
+
+## Cropsy và màu sắc
+
+9 loại cropsy, mỗi loại thuộc một **họ màu**: đỏ (dâu tây), cam (cà rốt), vàng (bắp, hướng dương, lúa mì), hồng (táo),
+xanh ngọc (bắp cải băng — mới), xanh dương (việt quất), tím (cà tím — mới). Táo đổi sang **hồng sẫm có viền** (không lẫn với nền cỏ xanh) và dâu sang **đỏ thật**
+để không còn lẫn hồng/đỏ. Một màn không bao giờ có hai loại cùng họ màu (vd. bắp cạnh lúa mì). Hai loại mới xuất hiện rải rác,
+ngẫu nhiên theo seed của màn (khoảng 2/5 số màn), luôn thay một loại màu ấm không phải mục tiêu; số loại cropsy và mục tiêu
+của mỗi màn giữ nguyên như đã chỉnh (`diversify` trong `src/config.ts`).
+
+## Điểm và sao (thanh sao kiểu Candy Crush)
+
+Điểm chạy ngầm, người chơi chỉ thấy **thanh sao** dưới các mục tiêu: thanh đầy dần theo điểm, qua mỗi mốc thì sao tương ứng
+sáng lên. Thắng màn luôn được ít nhất 1★; 2★ và 3★ tùy điểm.
+
+| Nguồn điểm (`SCORE` trong `src/config.ts`) | Điểm |
+|---|---|
+| Mỗi cropsy bị xoá | 20 × hệ số cascade (×1 nước đổi, ×2 cascade đầu… tối đa ×5) |
+| Tạo power-up | Máy Cày 60, Ong 80, Bó Rơm 100, Hạt Cầu Vồng 200 |
+| Power-up nổ / combo | 40 mỗi lần |
+| Mỗi lớp vật cản bị phá | 40, thêm 60 khi vỡ hẳn |
+| Cày một ô đất | 60 |
+| Đưa thú xuống | 500 |
+| **Thu hoạch thần tốc** (Harvest Rush): mỗi lượt còn dư khi thắng | 150 |
+
+Vì vậy ghép 3 đơn thuần cho ít điểm (60 / nước) và khó đạt 3★; ghép tạo power-up, combo, cascade và thắng sớm cho điểm cao.
+Mốc sao từng màn (`STAR_SCORES`) được chỉnh bằng bot mô phỏng người chơi: 1★ ở khoảng 60% điểm thắng thấp nhất (sao đầu
+sáng giữa màn), 2★ ≈ phân vị 40, 3★ ≈ phân vị 75 của điểm khi thắng (màn 1–10: phân vị 25 / 55 cho dễ gom xu).
+Khi thắng, lượt dư biến thành điểm có hiệu ứng lấp lánh, rồi mới tính sao.
 
 ## Power-up (cropsy đặc biệt)
 

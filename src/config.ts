@@ -194,8 +194,8 @@ export const ORDER_COUNT = 3;
 // Soil plows when a cropsy on top of it is cleared. Animals are collected
 // when they reach the bottom row. Mud / Crate / Soil goal counts come from the map.
 
-export type TileKind = 'wheat' | 'carrot' | 'apple' | 'berry' | 'sunflower' | 'corn' | 'blueberry';
-export const TILE_KINDS: TileKind[] = ['wheat', 'carrot', 'apple', 'berry', 'sunflower', 'corn', 'blueberry'];
+export type TileKind = 'wheat' | 'carrot' | 'apple' | 'berry' | 'sunflower' | 'corn' | 'blueberry' | 'eggplant' | 'cabbage';
+export const TILE_KINDS: TileKind[] = ['wheat', 'carrot', 'apple', 'berry', 'sunflower', 'corn', 'blueberry', 'eggplant', 'cabbage'];
 export type AnimalKind = 'chick' | 'piglet';
 
 export type Difficulty = 'tutorial' | 'supereasy' | 'easy' | 'normal' | 'hard' | 'superhard' | 'boss';
@@ -348,13 +348,145 @@ const DEFS: LevelInput[] = [
     map: ['.a.....a.', 'sssssssss', 's.m.c.m.s', 'sssssssss', 'c.s.m.s.c', 'sssssssss', 's.m.c.m.s', 'sss...sss', '....s....'], goals: [collect('any', 130), SOIL, animals(4)], animal: 'piglet', hives: [3, 5], tutorial: ['any'], intro: 'tip_boss' },
 ];
 
+// ---------------------------------------------------------------------------
+// Cropsy colours. Each kind belongs to one colour family; a level never mixes
+// two kinds of the same family (no corn next to wheat, no pink next to red).
+// The cool kinds (cyan Frost Cabbage, blueberry, purple Eggplant)
+// are mixed in sparingly: a seeded pick per level swaps one warm, non-goal kind
+// for a cool one now and then. The number of kinds and every goal stay as tuned.
+
+export const FAMILY: Record<TileKind, string> = {
+  berry: 'red', carrot: 'orange', corn: 'yellow', sunflower: 'yellow', wheat: 'yellow',
+  apple: 'pink', cabbage: 'cyan', blueberry: 'blue', eggplant: 'purple',
+};
+const WARM: TileKind[] = ['berry', 'carrot', 'corn', 'sunflower', 'wheat'];
+const COOL_NEW: TileKind[] = ['eggplant', 'cabbage'];
+/** Chance that a level gets one of the new cool cropsies. */
+const COOL_CHANCE = 0.4;
+
+function diversify(id: number, colors: TileKind[], goals: GoalDef[]): TileKind[] {
+  if (id <= 2) return colors; // the two tutorial boards stay as designed
+  let s = (id * 2654435761) >>> 0;
+  const rand = (): number => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const fixed = new Set<TileKind>(goals.flatMap((g) => (g.type === 'collect' && g.tile !== 'any' ? [g.tile] : [])));
+  const out = colors.slice();
+  const familyTaken = (k: TileKind, skip: number): boolean => out.some((o, i) => i !== skip && FAMILY[o] === FAMILY[k]);
+  const pickFree = (skip: number, pool: TileKind[]): TileKind | null => {
+    const free = pool.filter((k) => !out.includes(k) && !familyTaken(k, skip));
+    return free.length ? free[Math.floor(rand() * free.length)] : null;
+  };
+  // 1. One kind per colour family (goal kinds win the clash).
+  out.forEach((k, i) => {
+    if (fixed.has(k) || !familyTaken(k, i)) return;
+    const alt = pickFree(i, [...WARM, 'apple', 'blueberry']) ?? pickFree(i, COOL_NEW);
+    if (alt) out[i] = alt;
+  });
+  // 2. Now and then, a warm non-goal kind gives way to a new cool one.
+  if (rand() < COOL_CHANCE && !out.some((k) => COOL_NEW.includes(k))) {
+    const swappable = out.map((k, i) => i).filter((i) => !fixed.has(out[i]) && WARM.includes(out[i]));
+    if (swappable.length) {
+      const i = swappable[Math.floor(rand() * swappable.length)];
+      const alt = pickFree(i, COOL_NEW);
+      if (alt) out[i] = alt;
+    }
+  }
+  return out;
+}
+
 export const MATCH_LEVELS: MatchLevelConfig[] = DEFS.map((d, i) => ({
   ...d,
+  colors: diversify(i + 1, d.colors, d.goals),
   id: i + 1,
   seed: d.seed ?? 1000 + (i + 1) * 7919,
   powerChance: d.powerChance ?? POWER[d.difficulty],
   unlockAfter: i,
 }));
+
+// ---------------------------------------------------------------------------
+// Score and stars. The score runs in the background (players only see the star
+// bar fill). Plain 3-matches score little; power-ups, cascades, blockers,
+// soil, animals and moves left at the end score a lot more.
+
+export const SCORE = {
+  /** Each cropsy cleared, times the cascade multiplier (×1 for the swap, ×2 for the first cascade… up to ×5). */
+  tile: 20,
+  /** Making a power-up. */
+  made: { row: 60, col: 60, bee: 80, wrap: 100, rainbow: 200 } as Record<string, number>,
+  /** A power-up going off (or a power-up combo). */
+  blast: 40,
+  /** Each blocker layer knocked off, plus a bonus when it breaks. */
+  layer: 40,
+  broken: 60,
+  soil: 60,
+  animal: 500,
+  /** Harvest Rush: each move left when the level is won. */
+  moveLeft: 150,
+};
+
+/**
+ * Score for 1★ / 2★ / 3★, per level. Calibrated with the casual-player bot:
+ * 1★ is reached by nearly every win, 2★ by about the better half, 3★ by about
+ * the best quarter (more generous on levels 1–10).
+ */
+export const STAR_SCORES: Record<number, [number, number, number]> = {
+  1: [4000, 11000, 13500],
+  2: [4250, 10000, 12000],
+  3: [3000, 7250, 8500],
+  4: [4000, 8750, 11000],
+  5: [3750, 8000, 9250],
+  6: [4000, 8500, 10250],
+  7: [2750, 6000, 7250],
+  8: [5250, 12250, 13750],
+  9: [4000, 8500, 10000],
+  10: [5000, 11000, 12750],
+  11: [5250, 13250, 19000],
+  12: [5000, 11750, 14750],
+  13: [4000, 10500, 12500],
+  14: [4000, 10000, 12750],
+  15: [6750, 15000, 17750],
+  16: [4500, 11000, 13750],
+  17: [6250, 15500, 18000],
+  18: [5000, 12500, 15250],
+  19: [3500, 8000, 10000],
+  20: [6250, 14500, 16750],
+  21: [2250, 5500, 7000],
+  22: [5000, 12000, 14750],
+  23: [6500, 14500, 17250],
+  24: [4750, 10500, 12750],
+  25: [6000, 13000, 15750],
+  26: [5500, 14750, 20000],
+  27: [6250, 14750, 18000],
+  28: [5500, 13000, 16000],
+  29: [4750, 10750, 13500],
+  30: [6250, 16000, 20250],
+  31: [6500, 14750, 17000],
+  32: [6000, 13500, 16750],
+  33: [8000, 18000, 21000],
+  34: [5250, 17000, 24750],
+  35: [4750, 12000, 16250],
+  36: [6250, 15000, 18500],
+  37: [5500, 13750, 17750],
+  38: [6250, 16250, 23500],
+  39: [6500, 14750, 16750],
+  40: [5250, 12000, 14000],
+  41: [7000, 14750, 17000],
+  42: [5750, 14250, 19500],
+  43: [4250, 10250, 12500],
+  44: [3000, 7750, 10000],
+  45: [5500, 13500, 15250],
+  46: [7000, 18250, 23750],
+  47: [6750, 16000, 19000],
+  48: [6250, 15500, 19000],
+  49: [6500, 14750, 17250],
+  50: [9500, 24000, 28750],
+};
+
+/** Stars for a score; a won level always has at least 1. */
+export function starsForScore(levelId: number, score: number, won: boolean): number {
+  const t = STAR_SCORES[levelId] ?? [1000, 4000, 7000];
+  const n = score >= t[2] ? 3 : score >= t[1] ? 2 : score >= t[0] ? 1 : 0;
+  return won ? Math.max(1, n) : n;
+}
 
 /** How many of a goal the level needs (Mud / Crate / Soil are counted on the map). */
 export function goalNeed(cfg: MatchLevelConfig, g: GoalDef): number {
@@ -365,8 +497,6 @@ export function goalNeed(cfg: MatchLevelConfig, g: GoalDef): number {
   return n;
 }
 
-export const STAR_MOVES_2 = 3; // moves left for 2★
-export const STAR_MOVES_3 = 6; // moves left for 3★
 export const REVIVE_MOVES = 5;
 
 // ---------------------------------------------------------------------------
@@ -406,12 +536,6 @@ export const BOOSTERS: BoosterConfig[] = [
   { key: 'witch', price: 300, qty: 1, unlock: 10, use: 'target' },
 ];
 export const EXTRA_MOVES = 5;
-
-export function starsFor(movesLeft: number): number {
-  if (movesLeft >= STAR_MOVES_3) return 3;
-  if (movesLeft >= STAR_MOVES_2) return 2;
-  return 1;
-}
 
 /** Tutorial opening state (T00). */
 /** 6 wheat sow all six fields; their 12-wheat harvest overflows the 10-slot silo on purpose (→ Match-3 → upgrade). */

@@ -6,10 +6,10 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
-import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, starsFor, type BoosterConfig, type MatchLevelConfig, type TutorialKey } from '../config';
+import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, SCORE, STAR_SCORES, starsForScore, type BoosterConfig, type MatchLevelConfig, type TutorialKey } from '../config';
 import { t } from '../i18n';
 import {
-  Board, goalFor, goalsDone, goalsProgress, makeGoals, scoreTurn, type Special,
+  Board, goalFor, goalsDone, goalsProgress, makeGoals, scoreTurn, stepScore, type Special,
   type Fall, type GoalProgress, type Hit, type Move, type Pos, type StepCtx, type StepResult, type Tile,
 } from '../match3';
 import * as St from '../state';
@@ -94,8 +94,8 @@ function build(): void {
     <div class="mhud">
       <div class="top"><button class="iconbtn" id="m-home">${img(A.ICON_HOME)}</button><span class="lvl" id="m-lvl"></span>
         <div class="pill">${img(A.ICON_CLOCK)}<span id="m-moves">0</span></div></div>
-      <div class="goalbox"><div class="goals" id="m-goals"></div>
-        <div class="gbox stars"><div class="starrow" id="m-stars"></div></div></div>
+      <div class="goalbox"><div class="goals" id="m-goals"></div></div>
+      <div class="sbar" id="m-sbar"><div class="track"><i class="fill"></i></div>${[0, 1, 2].map((k) => `<span class="mk" data-k="${k}">${img(A.ICON_STAR)}</span>`).join("")}</div>
     </div>
     <div class="mfoot">
       <div class="btip" id="m-btip" style="display:none"></div>
@@ -173,6 +173,9 @@ export function openMatch(index: number, callbacks: MatchCallbacks, opts: { tuto
   const hard = cfg.difficulty === 'hard' || cfg.difficulty === 'superhard' || cfg.difficulty === 'boss';
   lvl.innerHTML = `${t('lvl')} ${cfg.id}${hard ? ` <em class="diff ${cfg.difficulty}">${t(`diff_${cfg.difficulty}`)}</em>` : ''}`;
   buildGoalChips();
+  score = 0;
+  layoutStarBar();
+  updateStarBar();
   introText = !tutorialMode && cfg.intro ? t(cfg.intro) : '';
   closeTipCard();
   guide = null;
@@ -263,11 +266,37 @@ function chipCenter(key: string): { x: number; y: number } {
   return toStage(r.left + r.width / 2, r.top + r.height / 2);
 }
 
+// ---------------------------------------------------------------------------
+// The star bar: fills with the background score; each marker lights its star.
+
+let score = 0;
+let starT: [number, number, number] = [1000, 4000, 7000];
+const barMax = (): number => starT[2] * 1.12;
+
+function layoutStarBar(): void {
+  if (!root) return;
+  starT = STAR_SCORES[cfg.id] ?? [1000, 4000, 7000];
+  root.querySelectorAll<HTMLElement>('#m-sbar .mk').forEach((mk, k) => {
+    mk.style.left = `${(starT[k] / barMax()) * 100}%`;
+    mk.classList.remove('on');
+  });
+}
+
+function addScore(points: number): void {
+  if (points <= 0) return;
+  score += points;
+  updateStarBar();
+}
+
+function updateStarBar(): void {
+  if (!root) return;
+  root.querySelector<HTMLElement>('#m-sbar .fill')!.style.width = `${Math.min(100, (score / barMax()) * 100)}%`;
+  root.querySelectorAll<HTMLElement>('#m-sbar .mk').forEach((mk, k) => mk.classList.toggle('on', score >= starT[k]));
+}
+
 function updateHud(): void {
   if (!root) return;
-  const done = goalsDone(goals);
-  const stars = over ? 0 : done ? starsFor(moves) : starsFor(moves - 1);
-  const sig = `${moves}:${goals.map((g) => g.got).join(',')}:${stars}`;
+  const sig = `${moves}:${goals.map((g) => g.got).join(',')}`;
   if (sig === hudSig) return;
   hudSig = sig;
   root.querySelector('#m-moves')!.textContent = String(moves);
@@ -279,7 +308,6 @@ function updateHud(): void {
     chip.classList.toggle('done', ok);
     chip.querySelector('b')!.textContent = ok ? '✓' : String(g.need - g.got);
   }
-  root.querySelector('#m-stars')!.innerHTML = [1, 2, 3].map((s) => img(A.ICON_STAR, stars >= s ? 'on' : '')).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -692,11 +720,14 @@ function afterTurn(): void {
 async function runResolve(turn: StepCtx): Promise<void> {
   const b = board;
   if (!b) return;
+  let cascade = 0;
   for (let i = 0; i < 80; i++) {
     const res = b.step(turn);
     turn = {};
     const out = b.collectAnimals();
     if (!res && !out.length) break;
+    if (res) addScore(stepScore(res, cascade++));
+    addScore(out.length * SCORE.animal);
     if (res) await animateStep(res);
     if (board !== b) return;
     if (out.length) await animateAnimals(out);
@@ -817,11 +848,32 @@ function finish(won: boolean): void {
   setArmed(null);
   updateHud();
   const i = levelIndex;
-  setTimeout(() => {
-    if (!cb) return;
-    if (won) cb.onWin(i, starsFor(moves), moves);
+  const b = board;
+  void (async () => {
+    await wait(450);
+    if (won && moves > 0 && board === b) await harvestRush();
+    if (!cb || board !== b) return;
+    if (won) cb.onWin(i, starsForScore(cfg.id, score, true), moves);
     else cb.onLose(i);
-  }, 450);
+  })();
+}
+
+/** Harvest Rush: every move left on a win turns into bonus points, one sparkle at a time. */
+async function harvestRush(): Promise<void> {
+  const b = board!;
+  toast(t('harvest_rush'));
+  const left = moves;
+  const step = Math.max(40, Math.min(110, 1400 / left));
+  for (let k = 0; k < left && board === b; k++) {
+    moves--;
+    addScore(SCORE.moveLeft);
+    const r = Math.floor(Math.random() * b.rows), c = Math.floor(Math.random() * b.cols);
+    if (b.mask[r][c]) fxs.push({ kind: 'sparkle', x: cx(c), y: cy(r), t: 0, dur: 420 });
+    hudSig = '';
+    updateHud();
+    await wait(step);
+  }
+  await wait(300);
 }
 
 /**
@@ -1198,7 +1250,7 @@ if (new URLSearchParams(location.search).has('debug')) {
     moves: () => (board ? board.legalMoves() : []),
     cell: (p: Pos) => ({ x: cx(p.c), y: cy(p.r) }),
     state: () => ({
-      level: cfg.id, moves, locked, over, armed: armed?.key ?? null, coins: St.S.wallet.coin, boosters: { ...St.S.boosters },
+      level: cfg.id, moves, locked, over, armed: armed?.key ?? null, coins: St.S.wallet.coin, boosters: { ...St.S.boosters }, score, starT,
       goals: goals.map((g) => ({ key: g.key, got: g.got, need: g.need })),
     }),
     board: () => board,
