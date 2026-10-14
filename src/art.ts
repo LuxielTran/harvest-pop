@@ -409,8 +409,8 @@ ${face(50, 48, 44)}`),
 <ellipse cx="40" cy="36" rx="4" ry="8" fill="#fff" opacity=".35"/>
 ${face(50, 46, 42)}`),
   apple: svg(100, 100, `
-<defs><radialGradient id="ta" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ffa8d8"/><stop offset=".55" stop-color="#ec3f9c"/><stop offset="1" stop-color="#a3125f"/></radialGradient></defs>
-<path d="M50 26c-10-16-30-14-36 4-6 20 8 52 24 60 6 3 10 0 12 0s6 3 12 0c16-8 30-40 24-60-6-18-26-20-36-4z" fill="url(#ta)" stroke="#7a0c47" stroke-width="3"/>
+<defs><radialGradient id="ta" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ff7b7b"/><stop offset="1" stop-color="#d81f2a"/></radialGradient></defs>
+<path d="M50 26c-10-16-30-14-36 4-6 20 8 52 24 60 6 3 10 0 12 0s6 3 12 0c16-8 30-40 24-60-6-18-26-20-36-4z" fill="url(#ta)"/>
 <path d="M50 28c0-10 4-16 10-20" stroke="#6b3f17" stroke-width="5" stroke-linecap="round" fill="none"/>
 <path d="M54 16c8-8 20-6 22 2-8 6-18 4-22-2z" fill="#4fb84a"/>
 <ellipse cx="30" cy="40" rx="6" ry="10" fill="#fff" opacity=".35" transform="rotate(-15 30 40)"/>
@@ -598,7 +598,7 @@ export const ICON_ANY_GOAL = svg(64, 64, `
 <path d="M12 40h40M14 48h36M22 32l2 24M32 32v24M42 32l-2 24" stroke="#8a5a2b" stroke-width="2"/>`);
 
 export const TILE_COLORS: Record<string, string> = {
-  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#ec3f9c', berry: '#e8261e', sunflower: '#ffd23a', corn: '#f7cf3a', blueberry: '#4a6fe0',
+  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#e8413c', berry: '#ff4d8a', sunflower: '#ffd23a', corn: '#f7cf3a', blueberry: '#4a6fe0',
   eggplant: '#7b3fd0', cabbage: '#3fc4cc',
 };
 
