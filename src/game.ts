@@ -37,12 +37,14 @@ function boot(): void {
   const q = new URLSearchParams(location.search);
   if (q.get('reset') === '1') St.resetAll();
   else St.loadFromSave(FalconSDK.userData.get());
-  if (q.get('skiptut') === '1' && St.tutorialActive()) { St.setTutorialStep('COMPLETE'); St.refillOrders(); }
+  if (q.get('skiptut') === '1') St.skipTutorial();
   stage();
   buildFarm();
   setFarmHandlers({ playLevel: (i) => startLevel(i) });
   tutorial.start();
   St.refillOrders();
+  // QA hook (`?debug=1`): the farm state and services for automated tests.
+  if (q.has('debug')) (window as unknown as { __farm: unknown }).__farm = St;
 }
 
 function goFarm(): void {

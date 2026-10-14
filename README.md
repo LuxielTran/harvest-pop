@@ -15,15 +15,16 @@ npm run build    # dist/index.html — một tệp duy nhất
 
 | Tệp | Vai trò |
 |---|---|
-| `src/config.ts` | Số liệu: crop, gà, recipe, máy, kho & nâng cấp, XP, đơn hàng, **50 màn Match-3** (bản đồ ASCII + mục tiêu), xu thưởng / giá booster / giá hồi sinh, 3 booster |
-| `src/state.ts` | Save data + services (wallet, kho, farm state machine, đơn hàng, sao, nâng cấp, booster, hồi sinh). Mọi thay đổi: validate → ghi → `save()` qua `FalconSDK.userData` |
+| `src/farm-data.ts` | **Nội dung nông trại 50 cấp** (theo sheet "Harvest Pop Unlock Levels"): 15 cây trồng, 9 cây ăn quả/mỏ, 17 chuồng + 17 vật nuôi, 23 máy + 96 công thức, mốc XP, thưởng lên cấp, đơn xe tải, khách, thành tựu. Bảng tổng hợp: `LEVELS-FARM.md` |
+| `src/config.ts` | Re-export farm-data + **50 màn Match-3** (bản đồ ASCII + mục tiêu), xu thưởng / giá booster / giá hồi sinh, 3 booster |
+| `src/state.ts` | Save data + services (wallet, kho, ruộng, chuồng/vật nuôi, máy, cây, đơn xe tải, khách, thành tựu, sao, nâng kho, booster, hồi sinh). Mọi thay đổi: validate → ghi → `save()` qua `FalconSDK.userData`. Save cũ (không có `v: 2`) bắt đầu lại từ đầu |
 | `src/match3.ts` | Engine Match-3 thuần logic: bàn tới 9×9 mọi hình dạng, Bùn / Thùng gỗ / Đất, thú nuôi rơi xuống, 2 power-up, trọng lực thẳng + trượt chéo, combo, reshuffle, mục tiêu, gợi ý |
-| `src/tutorial.ts` | TutorialDirector T00→T12 (bắt buộc, resume theo save, chặn thao tác ngoài bước) |
-| `src/ui/farm.ts` | Farm Home: scene 2.5D, HUD, Shop (kể cả 3 booster), Kho/nâng kho, Upgrade Shop, Đơn hàng, Map 50 màn (tag Khó/Siêu khó/Trùm), Cài đặt |
+| `src/tutorial.ts` | TutorialDirector: các **bài học** theo từng thao tác (L1 cấp 1: kéo map → gieo → gặt → Match-3 → nâng silo (có bước bấm ✕) → chuồng gà → gà → cho ăn → nhặt trứng; L2 máy thức ăn + khách; L3 lò bánh; L4 xe tải; L6 thành tựu) |
+| `src/ui/farm.ts` | Farm Home: scene 2.5D (nhà, kho, silo, ruộng, chuồng, máy, cây, khách), HUD (thanh XP có số), Shop 3 tab, Kho/nâng kho, Upgrade Shop, Đơn xe tải, Khách, Thành tựu (chạm vào nhà), Map 50 màn, Cài đặt |
 | `src/ui/match.ts` | Màn Match-3 (canvas, khay gỗ 2.5D): HUD lượt / tối đa 3 mục tiêu / sao, hiệu ứng power-up, thanh 3 booster, popup kết quả |
-| `src/art.ts` | Toàn bộ art SVG gốc: công trình 2.5D, 7 cropsy, Cropsy Máy Cày, Hạt Cầu Vồng, bùn, thùng (nguyên / nứt), đất, gà con, heo con, icon booster |
+| `src/art.ts` + `art-core.ts`, `art-items.ts`, `art-animals.ts`, `art-crops.ts`, `art-pens.ts` | Toàn bộ art SVG gốc: helper 2.5D dùng chung, icon 138 sản phẩm, 17 vật nuôi, 15 cây trồng (3 giai đoạn), cây ăn quả, chuồng/nhà/máy, khách, 7 cropsy và vật phẩm Match-3 |
 | `src/game.ts` | Hợp đồng `FalconGame`: `startLevel(i)` mở thẳng màn Match i, `levelStart` (kèm `difficulty`) / `win` / `lose`, pause/resume/revive, `boosters` |
-| `LEVELS.md` | Bảng 50 màn: độ khó, số loại cropsy, lưới, lượt, mục tiêu và tỉ lệ thắng của bot |
+| `LEVELS.md` / `LEVELS-FARM.md` | Bảng 50 màn Match-3 / bảng 50 cấp nông trại (sinh từ farm-data) |
 
 ## Thiết kế màn (theo "level harvest pop.md")
 
@@ -115,7 +116,7 @@ Thiếu xu ở mọi đường (mua booster, hồi sinh) → `FalconSDK.shop.ope
 |---|---|
 | `?level=N` | Boot thẳng vào màn Match N |
 | `?reset=1` | Xoá save, về T00 |
-| `?skiptut=1` | Bỏ tutorial (save mới) |
+| `?skiptut=1` | Bỏ mọi bài học hướng dẫn (bắt đầu ở cấp 2) |
 | `?lang=vi` | UI tiếng Việt (mặc định theo ngôn ngữ app/trình duyệt) |
 | `?mock=1` | Giả lập bridge app của SDK |
 | `?data={"hp":{"wallet":{"coin":2000}}}` | (SDK) ghi đè user data lúc boot — tiện cấp xu để test booster/hồi sinh |

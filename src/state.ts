@@ -1,27 +1,41 @@
 // Game state and the services that mutate it: wallet, inventory, storage,
-// farm objects, orders, match stars and storage upgrades. Every mutation
-// follows validate → debit/credit → save; nothing here touches the DOM.
+// farm objects (fields, pens, machines, trees), truck orders, visitors,
+// achievements, match stars and storage upgrades. Every mutation follows
+// validate → debit/credit → save; nothing here touches the DOM.
+//
+// The farm is generic over farm-data.ts: a pen holds animals of its type, a
+// machine runs the recipes of its type, a tree regrows its produce.
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import {
-  ANIMALS, BOOSTERS, CHICKEN_COST, COOP_UNLOCK, CROP_GIFT, COOP_CAPACITY, COOP_COST, CROPS, DEFAULT_LAYOUT, ITEMS, MACHINES, MACHINE_SLOTS_MAX, MATERIAL_PRICE, ORDER_BONUS,
-  ORDER_COUNT, ORDER_TEMPLATES, PLOT_COST, PLOTS_MAX, PLOTS_START, RECIPES, REPLAY_COINS, REVIVE_PRICE, STORAGE_START,
-  CROP_GEM_PRICE, GEM_START, MATCH_LEVELS, STORAGE_UPGRADES, TUTORIAL_START, gemsFor, XP_THRESHOLDS, farmLevelForXp, maxPlots, slotPrice, winCoins, type StorageType, type StorageUpgrade,
+  ACHIEVEMENTS, ACHIEVEMENTS_UNLOCK, ANIMALS, BOOSTERS, CROPS, CROP_GEM_PRICE, DEFAULT_LAYOUT, GEM_START, ITEMS, LEVEL_GIFTS, LEVEL_REWARDS, MACHINES,
+  MACHINE_SLOTS_MAX, MATCH_LEVELS, MATERIAL_PRICE, ORDER_BONUS, ORDER_EXP_BONUS, PENS, PLOTS_MAX, PLOTS_START, RECIPES, REPLAY_COINS, REVIVE_PRICE,
+  STORAGE_START, STORAGE_UPGRADES, TREES, TRUCK_UNLOCK, TUTORIAL_SECONDS, TUTORIAL_START, VISITOR_BONUS, VISITOR_EXP, VISITOR_INTERVAL_SEC, VISITOR_UNLOCK,
+  XP_THRESHOLDS, farmLevelForXp, gemsFor, itemUnlockLevel, maxPlots, orderResetSec, orderShape, orderSlots, plotCost, slotPrice, winCoins,
+  type StatKey, type StorageType, type StorageUpgrade,
 } from './config';
 
 export type PlotStatus = 'empty' | 'growing' | 'ready';
 export interface PlotState { status: PlotStatus; crop: string | null; readyAt: number; }
-/** A chicken waits for feed (hungry), eats while it lays (feeding), then has eggs (ready). */
-export type ChickenStatus = 'hungry' | 'feeding' | 'ready';
-export interface ChickenState { status: ChickenStatus; readyAt: number; }
+/** An animal waits for feed (hungry), eats while it produces (feeding), then has produce (ready). A pet naps instead and wakes up hungry. */
+export type AnimalStatus = 'hungry' | 'feeding' | 'ready';
+export interface AnimalState { status: AnimalStatus; readyAt: number; }
+export interface PenState { type: string; animals: AnimalState[]; }
 /** One batch in a machine. Batches run one after another in queue order; a finished one waits to be collected. */
 export interface MachineJob { recipe: string; readyAt: number; }
 /** `slots` = how many batches (running, waiting or finished) the machine can hold. */
-export interface MachineState { owned: boolean; slots: number; queue: MachineJob[]; }
+export interface MachineState { type: string; slots: number; queue: MachineJob[]; }
+/** A tree is ready once `readyAt` has passed; harvesting starts the next growth. */
+export interface TreeState { type: string; readyAt: number; }
 export interface StorageState { tier: number; cap: number; items: Record<string, number>; }
 export interface OrderState { id: number; items: { item: string; qty: number }[]; coin: number; exp: number; }
+/** A deleted order's slot: refills at `at`, back in position `pos` on the board. */
+export interface OrderCooldown { at: number; pos: number; }
+/** The visitor at the gate: one item, paid above value, +VISITOR_EXP. `look` picks the character art. */
+export interface VisitorState { id: number; look: number; item: string; qty: number; coin: number; exp: number; }
 
 export interface SaveData {
+  v: number;
   wallet: { coin: number; star: number; gem: number };
   progress: { xp: number };
   storage: Record<StorageType, StorageState>;
@@ -31,20 +45,33 @@ export interface SaveData {
   boosters: Record<string, number>;
   /** First-time match tutorials already shown (key → 1). */
   tips: Record<string, number>;
-  tutorial: { stepId: string; seedsGranted: boolean; levelGranted: boolean; bonusStars: number };
+  /** `stepId` = the running lesson step ('IDLE' when none); `lessons` = guided lessons already finished. */
+  tutorial: { stepId: string; seedsGranted: boolean; levelGranted: boolean; bonusStars: number; lessons: Record<string, number> };
   farm: {
     plots: PlotState[];
-    coopBuilt: boolean;
-    chickens: ChickenState[];
-    machines: Record<string, MachineState>;
+    pens: PenState[];
+    machines: MachineState[];
+    trees: TreeState[];
     orders: OrderState[];
+    /** Slots emptied by a delete: when each one refills, and where on the board it sits. */
+    orderCooldowns: OrderCooldown[];
+    orderSeq: number;
+    visitor: VisitorState | null;
+    nextVisitorAt: number;
     /** Where the player moved buildings / plots (front grid cell); missing keys use DEFAULT_LAYOUT. */
     layout: Record<string, { a: number; b: number }>;
-    orderSeq: number;
   };
+  /** Lifetime counters behind the achievements. */
+  stats: Record<string, number>;
+  /** Achievement id → tiers already claimed. */
+  achievements: Record<string, number>;
+  /** Shop offers the player has looked at (offer key → 1); unseen unlocked ones carry a "new" badge. */
+  shopSeen: Record<string, number>;
   settings: { sound: number; music: number; haptic: number };
   lastSeen: number;
 }
+
+const SAVE_VERSION = 2;
 
 export type Listener = () => void;
 const listeners = new Set<Listener>();
@@ -62,6 +89,7 @@ export type GameEvent =
   | { type: 'star'; delta: number }
   | { type: 'gem'; delta: number }
   | { type: 'storageUpgraded'; storage: StorageType }
+  | { type: 'visitor' }
   | { type: 'action'; action: string; target?: string };
 const eventListeners = new Set<(e: GameEvent) => void>();
 export function onEvent(fn: (e: GameEvent) => void): () => void { eventListeners.add(fn); return () => eventListeners.delete(fn); }
@@ -71,6 +99,7 @@ export const now = (): number => Date.now();
 
 function freshSave(): SaveData {
   return {
+    v: SAVE_VERSION,
     wallet: { coin: TUTORIAL_START.coin, star: 0, gem: GEM_START },
     progress: { xp: 0 },
     storage: {
@@ -81,19 +110,22 @@ function freshSave(): SaveData {
     match: { bestStars: {} },
     boosters: {},
     tips: {},
-    tutorial: { stepId: 'T00', seedsGranted: false, levelGranted: false, bonusStars: 0 },
+    tutorial: { stepId: 'L1:PAN', seedsGranted: false, levelGranted: false, bonusStars: 0, lessons: {} },
     farm: {
       plots: Array.from({ length: PLOTS_START }, () => ({ status: 'empty' as PlotStatus, crop: null, readyAt: 0 })),
-      coopBuilt: false,
-      chickens: [],
-      machines: {
-        feedmill: { owned: false, slots: 1, queue: [] },
-        bakery: { owned: false, slots: 1, queue: [] },
-      },
+      pens: [],
+      machines: [],
+      trees: [],
       orders: [],
+      orderCooldowns: [],
       orderSeq: 1,
+      visitor: null,
+      nextVisitorAt: 0,
       layout: {},
     },
+    stats: {},
+    achievements: {},
+    shopSeen: {},
     settings: { sound: 1, music: 1, haptic: 1 },
     lastSeen: now(),
   };
@@ -103,6 +135,7 @@ export let S: SaveData = freshSave();
 
 const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const obj = (v: unknown): Record<string, any> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, any>) : {});
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 function numMap(v: unknown): Record<string, number> {
   const out: Record<string, number> = {};
@@ -110,21 +143,32 @@ function numMap(v: unknown): Record<string, number> {
   return out;
 }
 
-/** Merge a (possibly older or partial) save into a fresh one, type-checking every field. */
+const animalState = (c: unknown): AnimalState => {
+  const o = obj(c);
+  const status = ['hungry', 'feeding', 'ready'].includes(o.status) ? (o.status as AnimalStatus) : 'hungry';
+  return { status, readyAt: num(o.readyAt, 0) };
+};
+
+/**
+ * Merge a (possibly partial) save into a fresh one, type-checking every field.
+ * Saves from before the 50-level farm (no `v`) restart at the walkthrough: their
+ * objects, levels and tutorial steps no longer exist.
+ */
 export function loadFromSave(raw: Record<string, any>): void {
   const f = freshSave();
   const d = obj(raw);
-  if (!d.hp) { S = f; return; } // no Harvest Pop save yet → tutorial start
   const hp = obj(d.hp);
+  if (!d.hp || num(hp.v, 0) !== SAVE_VERSION) { S = f; return; }
   const w = obj(hp.wallet);
   f.wallet.coin = Math.max(0, num(w.coin, f.wallet.coin));
   f.wallet.star = Math.max(0, num(w.star, 0));
-  f.wallet.gem = Math.max(0, num(w.gem, GEM_START)); // saves from before gems start with the opening amount
+  f.wallet.gem = Math.max(0, num(w.gem, GEM_START));
   f.progress.xp = Math.max(0, num(obj(hp.progress).xp, 0));
   for (const t of ['silo', 'barn'] as StorageType[]) {
     const st = obj(obj(hp.storage)[t]);
     f.storage[t].tier = Math.max(1, num(st.tier, 1));
     f.storage[t].items = numMap(st.items);
+    for (const k of Object.keys(f.storage[t].items)) if (!ITEMS[k] || ITEMS[k].storage !== t) delete f.storage[t].items[k];
     f.storage[t].cap = Math.max(num(st.cap, STORAGE_START[t]), usedOf(f.storage[t]));
   }
   f.upgradeWallet = numMap(hp.upgradeWallet);
@@ -132,53 +176,57 @@ export function loadFromSave(raw: Record<string, any>): void {
   f.boosters = numMap(hp.boosters);
   f.tips = numMap(hp.tips);
   const tut = obj(hp.tutorial);
-  f.tutorial.stepId = typeof tut.stepId === 'string' ? tut.stepId : 'T00';
+  f.tutorial.stepId = typeof tut.stepId === 'string' ? tut.stepId : 'L1:PAN';
   f.tutorial.levelGranted = tut.levelGranted === true;
   f.tutorial.seedsGranted = tut.seedsGranted === true;
   f.tutorial.bonusStars = num(tut.bonusStars, 0);
+  f.tutorial.lessons = numMap(tut.lessons);
   const farm = obj(hp.farm);
-  if (Array.isArray(farm.plots)) {
-    // The first PLOTS_START fields always exist; bought ones (up to PLOTS_MAX) follow.
-    farm.plots.slice(0, PLOTS_MAX).forEach((p: unknown, i: number) => {
-      const o = obj(p);
-      // Older saves had plots for sale ('locked'); every saved plot is open now.
-      const status = ['growing', 'ready'].includes(o.status) ? (o.status as PlotStatus) : 'empty';
-      f.farm.plots[i] = { status, crop: typeof o.crop === 'string' && CROPS[o.crop] ? o.crop : null, readyAt: num(o.readyAt, 0) };
-      if ((status === 'growing' || status === 'ready') && !f.farm.plots[i].crop) f.farm.plots[i] = { status: 'empty', crop: null, readyAt: 0 };
-    });
+  arr(farm.plots).slice(0, PLOTS_MAX).forEach((p, i) => {
+    const o = obj(p);
+    const status = ['growing', 'ready'].includes(o.status) ? (o.status as PlotStatus) : 'empty';
+    const crop = typeof o.crop === 'string' && CROPS[o.crop] ? o.crop : null;
+    f.farm.plots[i] = status !== 'empty' && crop ? { status, crop, readyAt: num(o.readyAt, 0) } : { status: 'empty', crop: null, readyAt: 0 };
+  });
+  for (const p of arr(farm.pens)) {
+    const o = obj(p);
+    const cfg = PENS[o.type];
+    if (!cfg) continue;
+    f.farm.pens.push({ type: cfg.id, animals: arr(o.animals).slice(0, cfg.capacity).map(animalState) });
   }
-  f.farm.coopBuilt = farm.coopBuilt === true;
-  if (Array.isArray(farm.chickens)) {
-    f.farm.chickens = farm.chickens.slice(0, COOP_CAPACITY).map((c: unknown) => {
-      const o = obj(c);
-      // Older saves called the eating state 'producing'.
-      const raw = o.status === 'producing' ? 'feeding' : o.status;
-      const status = ['hungry', 'feeding', 'ready'].includes(raw) ? (raw as ChickenStatus) : 'hungry';
-      return { status, readyAt: num(o.readyAt, 0) };
-    });
+  for (const m of arr(farm.machines)) {
+    const o = obj(m);
+    const cfg = MACHINES[o.type];
+    if (!cfg) continue;
+    const queue: MachineJob[] = arr(o.queue).map((j) => obj(j)).filter((j) => RECIPES[j.recipe]?.machine === cfg.id).map((j) => ({ recipe: j.recipe as string, readyAt: num(j.readyAt, 0) }));
+    const slots = Math.max(1, Math.min(MACHINE_SLOTS_MAX, Math.floor(num(o.slots, 1))));
+    f.farm.machines.push({ type: cfg.id, slots: Math.max(slots, queue.length), queue });
   }
-  for (const id of Object.keys(f.farm.machines)) {
-    const m = obj(obj(farm.machines)[id]);
-    if (!Object.keys(m).length) continue;
-    const queue: MachineJob[] = Array.isArray(m.queue)
-      ? m.queue.map((j: unknown) => obj(j)).filter((j: Record<string, any>) => RECIPES[j.recipe]?.machine === id).map((j: Record<string, any>) => ({ recipe: j.recipe as string, readyAt: num(j.readyAt, 0) }))
-      : []; // older saves held one batch as status / recipe / readyAt
-    if (!Array.isArray(m.queue) && typeof m.recipe === 'string' && RECIPES[m.recipe] && m.status !== 'idle') queue.push({ recipe: m.recipe, readyAt: num(m.readyAt, 0) });
-    const slots = Math.max(1, Math.min(MACHINE_SLOTS_MAX, Math.floor(num(m.slots, 1))));
-    f.farm.machines[id] = { owned: m.owned === true, slots: Math.max(slots, queue.length), queue };
+  for (const tr of arr(farm.trees)) {
+    const o = obj(tr);
+    if (TREES[o.type]) f.farm.trees.push({ type: o.type, readyAt: num(o.readyAt, 0) });
   }
-  if (Array.isArray(farm.orders)) {
-    f.farm.orders = farm.orders.slice(0, ORDER_COUNT).map((o: unknown) => {
-      const x = obj(o);
-      const items = Array.isArray(x.items) ? x.items.map((it: unknown) => ({ item: String(obj(it).item), qty: Math.max(1, num(obj(it).qty, 1)) })).filter((it: { item: string }) => ITEMS[it.item]) : [];
-      return { id: num(x.id, 0), items, coin: Math.max(0, num(x.coin, 0)), exp: Math.max(0, num(x.exp, 0)) };
-    }).filter((o: OrderState) => o.items.length > 0);
-  }
+  f.farm.orders = arr(farm.orders).map((o) => {
+    const x = obj(o);
+    const items = arr(x.items).map((it) => ({ item: String(obj(it).item), qty: Math.max(1, num(obj(it).qty, 1)) })).filter((it) => ITEMS[it.item]);
+    return { id: num(x.id, 0), items, coin: Math.max(0, num(x.coin, 0)), exp: Math.max(0, num(x.exp, 0)) };
+  }).filter((o) => o.items.length > 0);
+  f.farm.orderCooldowns = arr(farm.orderCooldowns).map((x, i) => (typeof x === 'number' ? { at: x, pos: i } : { at: num(obj(x).at, 0), pos: num(obj(x).pos, i) })).filter((x) => x.at > 0);
+  // The board never holds more than the level's slots (older builds could leave extras behind).
+  const slotsNow = orderSlots(farmLevelForXp(f.progress.xp));
+  f.farm.orders = f.farm.orders.slice(0, slotsNow);
+  f.farm.orderCooldowns = f.farm.orderCooldowns.slice(0, Math.max(0, slotsNow - f.farm.orders.length));
   f.farm.orderSeq = Math.max(1, num(farm.orderSeq, 1));
-  for (const [key, v] of Object.entries(obj(farm.layout))) {
-    const o = obj(v);
-    if (/^(barn|silo|feedmill|bakery|coop|plot\d)$/.test(key) && Number.isInteger(o.a) && Number.isInteger(o.b)) f.farm.layout[key] = { a: o.a, b: o.b };
+  const v = obj(farm.visitor);
+  if (typeof v.item === 'string' && ITEMS[v.item]) f.farm.visitor = { id: num(v.id, 1), look: num(v.look, 0), item: v.item, qty: Math.max(1, num(v.qty, 1)), coin: num(v.coin, 0), exp: num(v.exp, VISITOR_EXP) };
+  f.farm.nextVisitorAt = num(farm.nextVisitorAt, 0);
+  for (const [key, val] of Object.entries(obj(farm.layout))) {
+    const o = obj(val);
+    if (/^(barn|silo|house|plot\d+|pen\d+|mach\d+|tree\d+)$/.test(key) && Number.isInteger(o.a) && Number.isInteger(o.b)) f.farm.layout[key] = { a: o.a, b: o.b };
   }
+  f.stats = numMap(hp.stats);
+  f.achievements = numMap(hp.achievements);
+  f.shopSeen = numMap(hp.shopSeen);
   const set = obj(hp.settings);
   f.settings = { sound: num(set.sound, 1), music: num(set.music, 1), haptic: num(set.haptic, 1) };
   f.lastSeen = num(hp.lastSeen, now());
@@ -192,8 +240,11 @@ function guardClock(): void {
   if (t < S.lastSeen - 5000) {
     const shift = t - S.lastSeen;
     for (const p of S.farm.plots) if (p.readyAt) p.readyAt += shift;
-    for (const c of S.farm.chickens) if (c.readyAt) c.readyAt += shift;
-    for (const m of Object.values(S.farm.machines)) for (const j of m.queue) j.readyAt += shift;
+    for (const pen of S.farm.pens) for (const c of pen.animals) if (c.readyAt) c.readyAt += shift;
+    for (const m of S.farm.machines) for (const j of m.queue) j.readyAt += shift;
+    for (const tr of S.farm.trees) if (tr.readyAt) tr.readyAt += shift;
+    if (S.farm.nextVisitorAt) S.farm.nextVisitorAt += shift;
+    for (const c of S.farm.orderCooldowns) c.at += shift;
   }
   S.lastSeen = t;
 }
@@ -207,7 +258,7 @@ export function save(): void {
   notify();
 }
 
-/** Reset to the tutorial start. Used by `?reset=1` for QA. */
+/** Reset to the tutorial start. Used by `?reset=1` and "Reset all game". */
 export function resetAll(): void { S = freshSave(); save(); }
 
 // ---------------------------------------------------------------------------
@@ -224,8 +275,10 @@ export const count = (item: string): number => {
   if (def.storage === 'upgrade') return S.upgradeWallet[item] ?? 0;
   return S.storage[def.storage].items[item] ?? 0;
 };
-export const tutorialActive = (): boolean => S.tutorial.stepId !== 'COMPLETE';
+/** A guided lesson is running: actions outside it are refused and every timer runs fast. */
+export const tutorialActive = (): boolean => S.tutorial.stepId !== 'IDLE' && S.tutorial.stepId !== 'COMPLETE';
 export const isTutorialStep = (id: string): boolean => S.tutorial.stepId === id;
+export const lessonDone = (id: string): boolean => S.tutorial.lessons[id] === 1;
 export function nextUpgrade(t: StorageType): StorageUpgrade | null {
   return STORAGE_UPGRADES[t].find((u) => u.tier === S.storage[t].tier + 1) ?? null;
 }
@@ -233,6 +286,14 @@ export function canAffordUpgrade(t: StorageType): boolean {
   const u = nextUpgrade(t);
   return !!u && u.required.every((r) => (S.upgradeWallet[r.item] ?? 0) >= r.qty);
 }
+export const stat = (key: StatKey): number => S.stats[key] ?? 0;
+function bump(key: StatKey, n = 1): void { S.stats[key] = stat(key) + n; }
+
+/** How many of a pen / machine type the player owns, and how many the farm level allows. */
+export const pensOf = (type: string): number => S.farm.pens.filter((p) => p.type === type).length;
+export const machinesOf = (type: string): number => S.farm.machines.filter((m) => m.type === type).length;
+export const treesOf = (type: string): number => S.farm.trees.filter((t) => t.type === type).length;
+export const allowedCount = (unlockLevels: number[], level = farmLevel()): number => unlockLevels.filter((l) => l <= level).length;
 
 // ---------------------------------------------------------------------------
 // Wallet & inventory primitives (no save; callers save once per transaction)
@@ -241,10 +302,13 @@ function addCoin(delta: number): void {
   S.wallet.coin = Math.max(0, S.wallet.coin + delta);
   emit({ type: 'coin', delta });
 }
+function addGems(delta: number): void {
+  S.wallet.gem = Math.max(0, S.wallet.gem + delta);
+  emit({ type: 'gem', delta });
+}
 function spendGems(n: number): boolean {
   if (S.wallet.gem < n) return false;
-  S.wallet.gem -= n;
-  emit({ type: 'gem', delta: -n });
+  addGems(-n);
   return true;
 }
 function addXp(delta: number): void {
@@ -253,8 +317,11 @@ function addXp(delta: number): void {
   emit({ type: 'xp', delta });
   const after = farmLevel();
   for (let lvl = before + 1; lvl <= after; lvl++) {
-    // A level that unlocks a crop gives CROP_GIFT of it to sow.
-    for (const c of Object.values(CROPS)) if (c.unlockLevel === lvl) addItem(c.id, CROP_GIFT);
+    // A new level hands out its gems / coins, the seeds of the crops it unlocks and any listed gift.
+    const r = LEVEL_REWARDS[lvl];
+    if (r) { if (r.coin) addCoin(r.coin); if (r.gem) addGems(r.gem); }
+    for (const c of Object.values(CROPS)) if (c.unlockLevel === lvl) addItem(c.id, c.gift);
+    for (const g of LEVEL_GIFTS[lvl] ?? []) addItem(g.item, g.qty);
     emit({ type: 'levelUp', level: lvl });
   }
 }
@@ -274,17 +341,28 @@ function roomFor(item: string, qty: number): boolean {
 // ---------------------------------------------------------------------------
 // Timers
 
-const secondsFor = (normal: number, tutorial: number): number => (tutorialActive() ? tutorial : normal);
+const secondsFor = (normal: number): number => (tutorialActive() ? Math.min(normal, TUTORIAL_SECONDS) : normal);
+export const animalMs = (type: string): number => secondsFor(ANIMALS[type].produceSeconds) * 1000;
+export const cropMs = (crop: string): number => secondsFor(CROPS[crop].growSeconds) * 1000;
+export const recipeMs = (rid: string): number => secondsFor(RECIPES[rid].seconds) * 1000;
+export const treeMs = (type: string): number => secondsFor(TREES[type].seconds) * 1000;
 
-/** Advance every timer to `now()`: growing → ready, feeding → ready, a batch finishing. */
+/** Advance every timer to `now()`: growing → ready, feeding → ready (a pet wakes up hungry), a batch or a tree finishing, a visitor arriving. */
 let lastTick = 0;
 export function tick(): boolean {
   const t = now();
   let changed = false;
   for (const p of S.farm.plots) if (p.status === 'growing' && t >= p.readyAt) { p.status = 'ready'; changed = true; }
-  for (const c of S.farm.chickens) if (c.status === 'feeding' && t >= c.readyAt) { c.status = 'ready'; changed = true; }
-  for (const m of Object.values(S.farm.machines)) for (const j of m.queue) if (j.readyAt > lastTick && j.readyAt <= t) changed = true;
+  for (const pen of S.farm.pens) {
+    const pet = !ANIMALS[PENS[pen.type].animal].produceItem;
+    for (const c of pen.animals) if (c.status === 'feeding' && t >= c.readyAt) { c.status = pet ? 'hungry' : 'ready'; c.readyAt = 0; changed = true; }
+  }
+  for (const m of S.farm.machines) for (const j of m.queue) if (j.readyAt > lastTick && j.readyAt <= t) changed = true;
+  for (const tr of S.farm.trees) if (tr.readyAt > lastTick && tr.readyAt <= t) changed = true;
   lastTick = t;
+  if (!S.farm.visitor && !tutorialActive() && farmLevel() >= VISITOR_UNLOCK && t >= S.farm.nextVisitorAt) { spawnVisitor(); changed = true; }
+  // A cooldown that ran out, or a new slot from a level-up, gets its order right away.
+  if (!tutorialActive() && (S.farm.orderCooldowns.some((x) => x.at <= t) || S.farm.orders.length + S.farm.orderCooldowns.length < orderSlots(farmLevel()))) { refillOrders(); changed = true; }
   if (changed) save();
   return changed;
 }
@@ -295,11 +373,12 @@ export function tick(): boolean {
 /** Front grid cell of a movable farm object (the player's layout, else the default; undefined if neither). */
 export const layoutOf = (key: string): { a: number; b: number } | undefined => S.farm.layout[key] ?? DEFAULT_LAYOUT[key];
 
-/** One more field (from farm level 2); the UI places it first, then calls this on ✓. */
+/** One more field; the UI places it first, then calls this on ✓. */
 export function buyPlot(): string {
-  if (S.farm.plots.length >= maxPlots(farmLevel())) return farmLevel() < 2 ? 'err_level' : 'err_max';
-  if (S.wallet.coin < PLOT_COST) return 'err_coin';
-  addCoin(-PLOT_COST);
+  if (S.farm.plots.length >= maxPlots(farmLevel())) return 'err_level';
+  const price = plotCost(S.farm.plots.length);
+  if (S.wallet.coin < price) return 'err_coin';
+  addCoin(-price);
   S.farm.plots.push({ status: 'empty', crop: null, readyAt: 0 });
   emit({ type: 'action', action: 'buyPlot', target: String(S.farm.plots.length - 1) });
   save();
@@ -323,7 +402,7 @@ export function plantCrop(i: number, crop: string): string {
   addItem(crop, -1);
   p.status = 'growing';
   p.crop = crop;
-  p.readyAt = now() + secondsFor(c.growSeconds, c.tutorialSeconds) * 1000;
+  p.readyAt = now() + cropMs(crop);
   emit({ type: 'action', action: 'plant', target: String(i) });
   save();
   return '';
@@ -335,7 +414,8 @@ export function harvest(i: number): string {
   const c = CROPS[p.crop];
   if (!roomFor(c.id, c.yieldQty)) { emit({ type: 'collectBlocked', storage: 'silo' }); return 'err_silo_full'; }
   addItem(c.id, c.yieldQty);
-  addXp(c.exp);
+  addXp(ITEMS[c.id].exp);
+  bump('harvests');
   p.status = 'empty';
   p.crop = null;
   p.readyAt = 0;
@@ -345,72 +425,92 @@ export function harvest(i: number): string {
   return '';
 }
 
-export function buyCoop(): string {
-  if (S.farm.coopBuilt) return 'err_state';
-  if (farmLevel() < COOP_UNLOCK) return 'err_level';
-  if (S.wallet.coin < COOP_COST) return 'err_coin';
-  addCoin(-COOP_COST);
-  S.farm.coopBuilt = true;
-  emit({ type: 'action', action: 'buyCoop' });
+// ---- Pens & animals ----
+
+export function buyPen(type: string): string {
+  const cfg = PENS[type];
+  if (!cfg) return 'err_state';
+  if (pensOf(type) >= allowedCount(cfg.unlockLevels)) return 'err_level';
+  if (S.wallet.coin < cfg.cost) return 'err_coin';
+  addCoin(-cfg.cost);
+  const animals: AnimalState[] = cfg.autoFill ? Array.from({ length: cfg.capacity }, () => ({ status: 'hungry' as AnimalStatus, readyAt: 0 })) : [];
+  S.farm.pens.push({ type, animals });
+  emit({ type: 'action', action: 'buyPen', target: type });
   save();
   return '';
 }
 
-export function buyChicken(): string {
-  if (!S.farm.coopBuilt) return 'err_state';
-  if (S.farm.chickens.length >= COOP_CAPACITY) return 'err_coop_full';
-  if (S.wallet.coin < CHICKEN_COST) return 'err_coin';
-  addCoin(-CHICKEN_COST);
-  S.farm.chickens.push({ status: 'hungry', readyAt: 0 });
-  emit({ type: 'action', action: 'buyChicken' });
+/** A pen of the animal's type with room, preferring the one asked for. */
+export function penWithRoom(animal: string, prefer = -1): number {
+  const ok = (i: number): boolean => { const p = S.farm.pens[i]; return !!p && PENS[p.type].animal === animal && p.animals.length < PENS[p.type].capacity; };
+  if (ok(prefer)) return prefer;
+  return S.farm.pens.findIndex((_, i) => ok(i));
+}
+
+export function buyAnimal(animal: string, penIndex = -1): string {
+  const a = ANIMALS[animal];
+  if (!a) return 'err_state';
+  const idx = penWithRoom(animal, penIndex);
+  if (idx < 0) return pensOf(penOfAnimal(animal)) ? 'err_pen_full' : 'err_need_pen';
+  if (S.wallet.coin < a.cost) return 'err_coin';
+  addCoin(-a.cost);
+  S.farm.pens[idx].animals.push({ status: 'hungry', readyAt: 0 });
+  emit({ type: 'action', action: 'buyAnimal', target: animal });
   save();
   return '';
 }
+export const penOfAnimal = (animal: string): string => Object.values(PENS).find((p) => p.animal === animal)?.id ?? '';
 
-export function feedChicken(i: number): string {
-  const c = S.farm.chickens[i];
-  const a = ANIMALS.chicken;
-  if (!c || c.status !== 'hungry') return 'err_state';
+export function feedAnimal(penIndex: number, i: number): string {
+  const pen = S.farm.pens[penIndex];
+  const c = pen?.animals[i];
+  if (!pen || !c || c.status !== 'hungry') return 'err_state';
+  const a = ANIMALS[PENS[pen.type].animal];
   if (count(a.feedItem) < a.feedQty) return 'err_no_feed';
   addItem(a.feedItem, -a.feedQty);
   c.status = 'feeding';
-  c.readyAt = now() + secondsFor(a.produceSeconds, a.tutorialSeconds) * 1000;
-  emit({ type: 'action', action: 'feed', target: String(i) });
+  c.readyAt = now() + animalMs(a.id);
+  if (!a.produceItem) { addXp(a.exp); bump('animals'); } // a pet: the treat is the reward
+  emit({ type: 'action', action: 'feed', target: `${penIndex}:${i}` });
   save();
   return '';
 }
 
-export function collectEgg(i: number): string {
-  const c = S.farm.chickens[i];
-  const a = ANIMALS.chicken;
-  if (!c || c.status !== 'ready') return 'err_state';
+export function collectAnimal(penIndex: number, i: number): string {
+  const pen = S.farm.pens[penIndex];
+  const c = pen?.animals[i];
+  if (!pen || !c || c.status !== 'ready') return 'err_state';
+  const a = ANIMALS[PENS[pen.type].animal];
+  if (!a.produceItem) return 'err_state';
   if (!roomFor(a.produceItem, a.produceQty)) { emit({ type: 'collectBlocked', storage: 'barn' }); return 'err_barn_full'; }
   addItem(a.produceItem, a.produceQty);
   addXp(a.exp);
+  bump('animals');
   c.status = 'hungry';
   c.readyAt = 0;
   emit({ type: 'collected', item: a.produceItem, qty: a.produceQty });
-  emit({ type: 'action', action: 'collectEgg', target: String(i) });
+  emit({ type: 'action', action: 'collect', target: `${penIndex}:${i}` });
   save();
   return '';
 }
 
-export function buyMachine(id: string): string {
-  const m = S.farm.machines[id];
-  const cfg = MACHINES[id];
-  if (!m || !cfg || m.owned) return 'err_state';
-  if (cfg.unlockLevel > farmLevel()) return 'err_level';
+// ---- Machines ----
+
+export function buyMachine(type: string): string {
+  const cfg = MACHINES[type];
+  if (!cfg) return 'err_state';
+  if (machinesOf(type) >= allowedCount(cfg.unlockLevels)) return 'err_level';
   if (S.wallet.coin < cfg.cost) return 'err_coin';
   addCoin(-cfg.cost);
-  m.owned = true;
-  emit({ type: 'action', action: 'buyMachine', target: id });
+  S.farm.machines.push({ type, slots: 1, queue: [] });
+  emit({ type: 'action', action: 'buyMachine', target: type });
   save();
   return '';
 }
 
 /** Finished batches (front of the queue) and the one now running, if any. */
-export function machineJobs(machineId: string): { done: MachineJob[]; running: MachineJob | null; waiting: MachineJob[] } {
-  const q = S.farm.machines[machineId]?.queue ?? [];
+export function machineJobs(index: number): { done: MachineJob[]; running: MachineJob | null; waiting: MachineJob[] } {
+  const q = S.farm.machines[index]?.queue ?? [];
   const t = now();
   const done = q.filter((j) => j.readyAt <= t);
   const pending = q.filter((j) => j.readyAt > t);
@@ -418,25 +518,25 @@ export function machineJobs(machineId: string): { done: MachineJob[]; running: M
 }
 
 /** Queue a batch: inputs are consumed now, it starts when the batch before it ends. */
-export function startRecipe(machineId: string, recipeId: string): string {
-  const m = S.farm.machines[machineId];
+export function startRecipe(index: number, recipeId: string): string {
+  const m = S.farm.machines[index];
   const r = RECIPES[recipeId];
-  if (!m || !r || !m.owned || r.machine !== machineId) return 'err_state';
+  if (!m || !r || r.machine !== m.type) return 'err_state';
   if (r.unlockLevel > farmLevel()) return 'err_level';
   if (m.queue.length >= m.slots) return 'err_slots';
   for (const inp of r.inputs) if (count(inp.item) < inp.qty) return 'err_inputs';
   for (const inp of r.inputs) addItem(inp.item, -inp.qty); // inputs are consumed atomically at start
   const last = m.queue[m.queue.length - 1];
   const start = Math.max(now(), last?.readyAt ?? 0);
-  m.queue.push({ recipe: recipeId, readyAt: start + secondsFor(r.seconds, r.tutorialSeconds) * 1000 });
-  emit({ type: 'action', action: 'startRecipe', target: machineId });
+  m.queue.push({ recipe: recipeId, readyAt: start + recipeMs(recipeId) });
+  emit({ type: 'action', action: 'startRecipe', target: m.type });
   save();
   return '';
 }
 
 /** Collect every finished batch (in order) the barn has room for. Returns the items collected. */
-export function collectOutput(machineId: string): { err: string; got: { item: string; qty: number }[] } {
-  const m = S.farm.machines[machineId];
+export function collectOutput(index: number): { err: string; got: { item: string; qty: number }[] } {
+  const m = S.farm.machines[index];
   const got: { item: string; qty: number }[] = [];
   if (!m) return { err: 'err_state', got };
   let err = '';
@@ -445,49 +545,148 @@ export function collectOutput(machineId: string): { err: string; got: { item: st
     if (!roomFor(r.output, r.outputQty)) { emit({ type: 'collectBlocked', storage: ITEMS[r.output].storage as StorageType }); err = 'err_barn_full'; break; }
     m.queue.shift();
     addItem(r.output, r.outputQty);
-    addXp(r.exp);
+    addXp(ITEMS[r.output].exp * r.outputQty);
+    bump('crafted');
     got.push({ item: r.output, qty: r.outputQty });
     emit({ type: 'collected', item: r.output, qty: r.outputQty });
   }
   if (!got.length) return { err: err || 'err_state', got };
-  emit({ type: 'action', action: 'collectOutput', target: machineId });
+  emit({ type: 'action', action: 'collectOutput', target: m.type });
   save();
   return { err: '', got };
 }
 
 /** Buy one more production slot: MACHINE_SLOT_BASE × 3^(slots − 1) coins. */
-export function buySlot(machineId: string): string {
-  const m = S.farm.machines[machineId];
-  if (!m || !m.owned) return 'err_state';
+export function buySlot(index: number): string {
+  const m = S.farm.machines[index];
+  if (!m) return 'err_state';
   if (m.slots >= MACHINE_SLOTS_MAX) return 'err_max';
   const price = slotPrice(m.slots);
   if (S.wallet.coin < price) return 'err_coin';
   addCoin(-price);
   m.slots += 1;
-  emit({ type: 'action', action: 'buySlot', target: machineId });
+  emit({ type: 'action', action: 'buySlot', target: m.type });
   save();
   return '';
 }
 
+// ---- Trees, bushes and the mine ----
+
+export function buyTree(type: string): string {
+  const cfg = TREES[type];
+  if (!cfg) return 'err_state';
+  if (cfg.unlockLevel > farmLevel()) return 'err_level';
+  if (treesOf(type) >= cfg.max) return 'err_max';
+  if (S.wallet.coin < cfg.cost) return 'err_coin';
+  addCoin(-cfg.cost);
+  S.farm.trees.push({ type, readyAt: now() + treeMs(type) });
+  emit({ type: 'action', action: 'buyTree', target: type });
+  save();
+  return '';
+}
+
+export const treeReady = (i: number): boolean => !!S.farm.trees[i] && S.farm.trees[i].readyAt <= now();
+
+let treeRng = 12345;
+/** What this harvest gives: the tree's produce, or one of the mine's ores (weighted, level-gated). */
+export function treeProduce(i: number): string {
+  const cfg = TREES[S.farm.trees[i].type];
+  const pool = cfg.produce.filter((p) => (p.unlockLevel ?? 0) <= farmLevel());
+  const total = pool.reduce((n, p) => n + p.weight, 0);
+  treeRng = (treeRng * 1664525 + 1013904223) >>> 0;
+  let r = (treeRng / 4294967296) * total;
+  for (const p of pool) { r -= p.weight; if (r <= 0) return p.item; }
+  return pool[pool.length - 1].item;
+}
+
+export function harvestTree(i: number): { err: string; item: string; qty: number } {
+  const tr = S.farm.trees[i];
+  if (!tr || !treeReady(i)) return { err: 'err_state', item: '', qty: 0 };
+  const cfg = TREES[tr.type];
+  const item = treeProduce(i);
+  if (!roomFor(item, cfg.produceQty)) { emit({ type: 'collectBlocked', storage: ITEMS[item].storage as StorageType }); return { err: 'err_barn_full', item, qty: 0 }; }
+  addItem(item, cfg.produceQty);
+  addXp(ITEMS[item].exp * cfg.produceQty);
+  bump('trees');
+  tr.readyAt = now() + treeMs(tr.type);
+  emit({ type: 'collected', item, qty: cfg.produceQty });
+  emit({ type: 'action', action: 'harvestTree', target: tr.type });
+  save();
+  return { err: '', item, qty: cfg.produceQty };
+}
+
 // ---------------------------------------------------------------------------
-// Orders
+// Truck orders: a board of `orderSlots(level)` orders, the main Coin source.
 
 let orderRng = 0;
 function rand(): number { orderRng = (orderRng * 1664525 + 1013904223) >>> 0; return orderRng / 4294967296; }
+const pick = <T>(list: T[]): T => list[Math.floor(rand() * list.length)];
 
-export function refillOrders(): void {
-  if (tutorialActive()) return;
+/** Items a visitor or the truck may ask for: sellable things the farm can already produce. */
+function askable(): string[] {
+  const lvl = farmLevel();
+  return Object.values(ITEMS).filter((it) => it.value > 0 && it.storage !== 'upgrade' && itemUnlockLevel(it.id) <= lvl).map((it) => it.id);
+}
+
+function makeOrder(items: { item: string; qty: number }[], bonus: number, expBonus: number): OrderState {
+  const value = items.reduce((n, x) => n + ITEMS[x.item].value * x.qty, 0);
+  const exp = items.reduce((n, x) => n + ITEMS[x.item].exp * x.qty, 0);
+  return { id: S.farm.orderSeq++, items, coin: Math.max(1, Math.round(value * bonus)), exp: Math.max(1, Math.round(exp * expBonus)) };
+}
+
+/** A fresh random order for the current level. */
+function randomOrder(): OrderState {
+  const shape = orderShape(farmLevel());
+  const pool = askable();
+  const n = Math.min(pool.length, 1 + Math.floor(rand() * shape.items));
+  const chosen = new Set<string>();
+  while (chosen.size < n) chosen.add(pick(pool));
+  return makeOrder([...chosen].map((item) => ({ item, qty: 1 + Math.floor(rand() * shape.maxQty) })), ORDER_BONUS, ORDER_EXP_BONUS);
+}
+
+/**
+ * Refill the truck board: the level has orderSlots(level) slots. A delivered order is replaced
+ * at once in the same position (`at`); a deleted one comes back in its position when its wait is
+ * over; a slot gained by a level-up is added at the end. `fromStock` (the lesson) builds the
+ * first order from what the player already has. Nothing beyond the slot count ever shows.
+ */
+export function refillOrders(fromStock = false, at = -1): void {
+  const lvl = farmLevel();
+  const slots = orderSlots(lvl);
+  if (!slots || (tutorialActive() && !fromStock)) return;
   orderRng = (S.farm.orderSeq * 2654435761 + S.progress.xp * 97) >>> 0;
+  const t = now();
   let changed = false;
-  while (S.farm.orders.length < ORDER_COUNT) {
-    const pool = ORDER_TEMPLATES.filter((t) => t.unlockLevel <= farmLevel());
-    const t = pool[Math.floor(rand() * pool.length)];
-    const items = t.items.map((x) => ({ ...x }));
-    const value = items.reduce((n, x) => n + ITEMS[x.item].value * x.qty, 0);
-    S.farm.orders.push({ id: S.farm.orderSeq++, items, coin: Math.round(value * ORDER_BONUS), exp: Math.max(1, Math.round(value / 6)) });
-    changed = true;
+  const insert = (o: OrderState, pos: number): void => { S.farm.orders.splice(Math.max(0, Math.min(pos, S.farm.orders.length)), 0, o); changed = true; };
+  if (fromStock && !S.farm.orders.length) {
+    const have = askable().filter((id) => count(id) > 0).sort((a, b) => count(b) - count(a)).slice(0, 2);
+    if (have.length) insert(makeOrder(have.map((id) => ({ item: id, qty: Math.min(count(id), 2) })), ORDER_BONUS, ORDER_EXP_BONUS), 0);
   }
+  if (at >= 0 && S.farm.orders.length + S.farm.orderCooldowns.length < slots) insert(randomOrder(), at);
+  // Waits that are over: the order returns to the slot it was deleted from.
+  for (const c of [...S.farm.orderCooldowns].sort((a, b) => a.pos - b.pos)) {
+    if (c.at > t) continue;
+    S.farm.orderCooldowns.splice(S.farm.orderCooldowns.indexOf(c), 1);
+    insert(randomOrder(), c.pos);
+  }
+  while (S.farm.orders.length + S.farm.orderCooldowns.length < slots) insert(randomOrder(), S.farm.orders.length);
+  while (S.farm.orders.length > slots) { S.farm.orders.pop(); changed = true; }
   if (changed) save();
+}
+
+/** The board's slots in order: an order, or the wait of a deleted one, per position. */
+export function orderSlotsView(): ({ order: OrderState } | { cooldown: OrderCooldown })[] {
+  const out: ({ order: OrderState } | { cooldown: OrderCooldown })[] = [];
+  const cds = [...S.farm.orderCooldowns].sort((a, b) => a.pos - b.pos);
+  let oi = 0;
+  const total = S.farm.orders.length + cds.length;
+  for (let p = 0; p < total; p++) {
+    const cd = cds.find((c) => c.pos === p);
+    if (cd && oi < S.farm.orders.length + 1) { out.push({ cooldown: cd }); cds.splice(cds.indexOf(cd), 1); continue; }
+    if (oi < S.farm.orders.length) out.push({ order: S.farm.orders[oi++] });
+    else if (cds.length) out.push({ cooldown: cds.shift()! });
+  }
+  return out;
 }
 
 export function canFulfil(o: OrderState): boolean { return o.items.every((x) => count(x.item) >= x.qty); }
@@ -500,19 +699,123 @@ export function fulfilOrder(id: number): string {
   for (const x of o.items) addItem(x.item, -x.qty);
   addCoin(o.coin);
   addXp(o.exp);
+  bump('orders');
   S.farm.orders.splice(idx, 1);
   emit({ type: 'action', action: 'order' });
   save();
-  refillOrders();
+  refillOrders(false, idx); // the new order takes the delivered one's place
   return '';
 }
 
-export function skipOrder(id: number): void {
+/** Delete an order the player does not want: its slot stays empty for orderResetSec(level), then refills (a delivered order is replaced at once). */
+export function deleteOrder(id: number): void {
   const idx = S.farm.orders.findIndex((o) => o.id === id);
   if (idx < 0) return;
   S.farm.orders.splice(idx, 1);
+  S.farm.orderCooldowns.push({ at: now() + orderResetSec(farmLevel()) * 1000, pos: idx });
+  emit({ type: 'action', action: 'deleteOrder' });
   save();
   refillOrders();
+}
+
+// ---------------------------------------------------------------------------
+// Visitors: one at a time at the gate, asking for a single item.
+
+/** A visitor walks up. `fromStock` (the lesson) asks for something the player has. */
+export function spawnVisitor(fromStock = false): void {
+  if (S.farm.visitor) return;
+  orderRng = (S.farm.orderSeq * 2246822519 + S.progress.xp * 31 + 7) >>> 0;
+  const lvl = farmLevel();
+  let item = '';
+  let qty = 1;
+  if (fromStock) {
+    const have = askable().filter((id) => count(id) > 0).sort((a, b) => count(b) - count(a));
+    item = have[0] ?? 'wheat';
+    if (!have.length) addItem('wheat', 1);
+  } else {
+    const pool = askable();
+    item = pick(pool);
+    qty = 1 + Math.floor(rand() * (lvl < 6 ? 2 : lvl < 20 ? 3 : 4));
+  }
+  const value = ITEMS[item].value * qty;
+  S.farm.visitor = { id: S.farm.orderSeq++, look: Math.floor(rand() * 3), item, qty, coin: Math.max(1, Math.round(value * VISITOR_BONUS)), exp: VISITOR_EXP + ITEMS[item].exp * qty };
+  emit({ type: 'visitor' });
+  save();
+}
+
+export function serveVisitor(): string {
+  const v = S.farm.visitor;
+  if (!v) return 'err_state';
+  if (count(v.item) < v.qty) return 'err_inputs';
+  addItem(v.item, -v.qty);
+  addCoin(v.coin);
+  addXp(v.exp);
+  bump('visitors');
+  S.farm.visitor = null;
+  S.farm.nextVisitorAt = now() + VISITOR_INTERVAL_SEC * 1000;
+  emit({ type: 'action', action: 'serveVisitor' });
+  save();
+  return '';
+}
+
+export function dismissVisitor(): void {
+  if (!S.farm.visitor) return;
+  S.farm.visitor = null;
+  S.farm.nextVisitorAt = now() + VISITOR_INTERVAL_SEC * 1000;
+  save();
+}
+
+// ---------------------------------------------------------------------------
+// Shop offers: everything the farm level lets the player buy right now, keyed so a
+// second copy of a pen / machine counts as a new offer. Unseen ones show a badge.
+
+export type ShopTab = 'build' | 'animals' | 'nature';
+export function shopOffers(): { key: string; tab: ShopTab }[] {
+  const lvl = farmLevel();
+  const out: { key: string; tab: ShopTab }[] = [];
+  for (const pen of Object.values(PENS)) {
+    const n = allowedCount(pen.unlockLevels, lvl);
+    for (let k = 1; k <= n; k++) out.push({ key: `pen:${pen.id}:${k}`, tab: 'build' });
+    if (n > 0 && !pen.autoFill) out.push({ key: `animal:${pen.animal}`, tab: 'animals' });
+  }
+  for (const m of Object.values(MACHINES)) for (let k = 1; k <= allowedCount(m.unlockLevels, lvl); k++) out.push({ key: `mach:${m.id}:${k}`, tab: 'build' });
+  for (const tr of Object.values(TREES)) if (tr.unlockLevel <= lvl) out.push({ key: `tree:${tr.id}`, tab: 'nature' });
+  return out;
+}
+export const offerSeen = (key: string): boolean => S.shopSeen[key] === 1;
+export const newOffers = (tab?: ShopTab): number => shopOffers().filter((o) => !offerSeen(o.key) && (!tab || o.tab === tab)).length;
+/** The player looked at a shop tab: its offers stop being new. */
+export function markOffersSeen(tab: ShopTab): void {
+  let changed = false;
+  for (const o of shopOffers()) if (o.tab === tab && !offerSeen(o.key)) { S.shopSeen[o.key] = 1; changed = true; }
+  if (changed) save();
+}
+
+// ---------------------------------------------------------------------------
+// Achievements: cumulative stats, claimed tier by tier at the farmhouse.
+
+export const achievementsOpen = (): boolean => farmLevel() >= ACHIEVEMENTS_UNLOCK;
+export const claimedTiers = (id: string): number => S.achievements[id] ?? 0;
+/** The next tier of an achievement that can be claimed now, or -1. */
+export function claimableTier(id: string): number {
+  const def = ACHIEVEMENTS.find((a) => a.id === id);
+  if (!def) return -1;
+  const k = claimedTiers(id);
+  return k < def.tiers.length && stat(def.stat) >= def.tiers[k].need ? k : -1;
+}
+export const anyClaimable = (): boolean => achievementsOpen() && ACHIEVEMENTS.some((a) => claimableTier(a.id) >= 0);
+
+export function claimAchievement(id: string): string {
+  const def = ACHIEVEMENTS.find((a) => a.id === id);
+  const k = claimableTier(id);
+  if (!def || k < 0) return 'err_state';
+  const tier = def.tiers[k];
+  S.achievements[id] = k + 1;
+  if (tier.gem) addGems(tier.gem);
+  addXp(tier.exp);
+  emit({ type: 'action', action: 'claim', target: id });
+  save();
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +832,8 @@ export function completeMatch(levelId: number, stars: number): { stars: number; 
   const delta = Math.max(0, stars - old);
   S.match.bestStars[key] = Math.max(old, stars);
   S.wallet.star += delta;
-  if (delta > 0) emit({ type: 'star', delta });
+  if (delta > 0) { emit({ type: 'star', delta }); bump('stars', delta); }
+  if (old === 0) bump('matches');
   const diff = MATCH_LEVELS.find((l) => l.id === levelId)?.difficulty ?? 'normal';
   const coins = stars > old ? winCoins(diff, stars) - winCoins(diff, old) : REPLAY_COINS;
   addCoin(coins);
@@ -625,7 +929,7 @@ export function upgradeStorage(t: StorageType): string {
 // ---------------------------------------------------------------------------
 // Tutorial-only grants
 
-/** After the first harvest → Match-3 → upgrade lesson the farm reaches level 2 (corn, +3 fields). */
+/** The end of the level-1 walkthrough always lands on level 2 (corn, the feed mill). */
 export function tutorialGrantLevel(level: number): void {
   if (S.tutorial.levelGranted) return;
   S.tutorial.levelGranted = true;
@@ -639,12 +943,26 @@ export function tutorialGrantSeeds(): void {
   if (S.tutorial.seedsGranted) return;
   S.tutorial.seedsGranted = true;
   addItem('wheat', Math.min(TUTORIAL_START.starterWheat, free('silo')));
+  for (const g of LEVEL_GIFTS[1] ?? []) addItem(g.item, g.qty);
+  save();
+}
+
+/** A lesson needs `qty` of an item on hand: top it up (storage limits ignored, it is a gift). */
+export function tutorialEnsure(item: string, qty: number): void {
+  const missing = qty - count(item);
+  if (missing <= 0) return;
+  addItem(item, missing);
   save();
 }
 
 export function setTutorialStep(id: string): void {
   if (S.tutorial.stepId === id) return;
   S.tutorial.stepId = id;
+  save();
+}
+
+export function markLessonDone(id: string): void {
+  S.tutorial.lessons[id] = 1;
   save();
 }
 
@@ -682,32 +1000,56 @@ export function skipPlot(i: number): string {
   return '';
 }
 
-/** Gems to have every eating chicken lay now (each chicken priced on its own time left). */
-export const chickensSkipCost = (): number =>
-  S.farm.chickens.filter((c) => c.status === 'feeding').reduce((n, c) => n + gemsFor(c.readyAt - now()), 0);
-export function skipChickens(): string {
-  const eating = S.farm.chickens.filter((c) => c.status === 'feeding');
-  if (!eating.length) return 'err_state';
-  if (!spendGems(chickensSkipCost())) return 'err_gem';
-  for (const c of eating) { c.readyAt = now(); c.status = 'ready'; }
-  emit({ type: 'action', action: 'gemSkip', target: 'chickens' });
+/** Gems to have every eating animal of a pen finish now (each priced on its own time left). */
+export const penSkipCost = (penIndex: number): number =>
+  (S.farm.pens[penIndex]?.animals ?? []).filter((c) => c.status === 'feeding').reduce((n, c) => n + gemsFor(c.readyAt - now()), 0);
+export function skipPen(penIndex: number): string {
+  const pen = S.farm.pens[penIndex];
+  const eating = pen?.animals.filter((c) => c.status === 'feeding') ?? [];
+  if (!pen || !eating.length) return 'err_state';
+  if (!spendGems(penSkipCost(penIndex))) return 'err_gem';
+  const pet = !ANIMALS[PENS[pen.type].animal].produceItem;
+  for (const c of eating) { c.readyAt = 0; c.status = pet ? 'hungry' : 'ready'; }
+  emit({ type: 'action', action: 'gemSkip', target: `pen${penIndex}` });
   save();
   return '';
 }
 
 /** Gems to finish a machine's running batch now; the batches queued after it move up. */
-export function machineSkipCost(machineId: string): number {
-  const run = machineJobs(machineId).running;
+export function machineSkipCost(index: number): number {
+  const run = machineJobs(index).running;
   return run ? gemsFor(run.readyAt - now()) : 0;
 }
-export function skipMachine(machineId: string): string {
-  const m = S.farm.machines[machineId];
-  const run = machineJobs(machineId).running;
+export function skipMachine(index: number): string {
+  const m = S.farm.machines[index];
+  const run = machineJobs(index).running;
   if (!m || !run) return 'err_state';
-  if (!spendGems(machineSkipCost(machineId))) return 'err_gem';
+  if (!spendGems(machineSkipCost(index))) return 'err_gem';
   const saved = run.readyAt - now();
   for (const j of m.queue) if (j.readyAt >= run.readyAt) j.readyAt -= saved;
-  emit({ type: 'action', action: 'gemSkip', target: machineId });
+  emit({ type: 'action', action: 'gemSkip', target: `mach${index}` });
   save();
   return '';
+}
+
+/** Gems to ripen a tree now. */
+export const treeSkipCost = (i: number): number => gemsFor(S.farm.trees[i].readyAt - now());
+export function skipTree(i: number): string {
+  const tr = S.farm.trees[i];
+  if (!tr || treeReady(i)) return 'err_state';
+  if (!spendGems(treeSkipCost(i))) return 'err_gem';
+  tr.readyAt = now();
+  emit({ type: 'action', action: 'gemSkip', target: `tree${i}` });
+  save();
+  return '';
+}
+
+/** QA (`?skiptut=1`): every guided lesson counts as done; the farm starts free at level 2 with the walkthrough's goods. */
+export function skipTutorial(): void {
+  for (const id of ['L1', 'L2', 'L3', 'L4', 'L6']) S.tutorial.lessons[id] = 1;
+  S.tutorial.stepId = 'IDLE';
+  tutorialGrantSeeds();
+  tutorialGrantLevel(2);
+  refillOrders();
+  save();
 }
