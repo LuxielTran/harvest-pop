@@ -13,7 +13,7 @@
 //   • CC-style gravity: straight down, then diagonal slides around blockers and holes.
 // The UI animates what each call returns; the level-tuning bot plays the same calls.
 
-import { goalNeed, type GoalDef, type MatchLevelConfig, type TileKind } from './config';
+import { SCORE, goalNeed, type GoalDef, type MatchLevelConfig, type TileKind } from './config';
 
 export type Special = 'row' | 'col' | 'rainbow' | 'wrap' | 'bee' | null;
 export interface Tile { id: number; kind: string; special: Special; animal: boolean; }
@@ -668,19 +668,21 @@ export class Board {
   // Whole turns (used by the hint, the tuning bot and the tests)
 
   /** Resolve until the board is still: clear steps, animals out, gravity. */
-  resolveAll(ctx: StepCtx): { steps: StepResult[]; animals: number } {
+  resolveAll(ctx: StepCtx): { steps: StepResult[]; animals: number; score: number } {
     const steps: StepResult[] = [];
     let animals = 0;
+    let score = 0;
     for (let i = 0; i < 80; i++) {
       const res = this.step(ctx);
       ctx = {};
       const out = this.collectAnimals();
       if (!res && !out.length) break;
-      if (res) steps.push(res);
+      if (res) { steps.push(res); score += stepScore(res, steps.length - 1); }
       animals += out.length;
+      score += out.length * SCORE.animal;
       this.applyGravity();
     }
-    return { steps, animals };
+    return { steps, animals, score };
   }
 
   /** The hint: the legal move that helps the goals most, judged on a copy of the board. */
@@ -753,5 +755,19 @@ export function scoreTurn(after: Board, goals: GoalProgress[], steps: StepResult
     s += animalsOut * 25;
     for (let r = 0; r < after.rows; r++) for (let c = 0; c < after.cols; c++) if (after.grid[r][c]?.animal) s -= after.exitDist[r][c] * 0.8;
   }
+  return s;
+}
+
+/**
+ * Background score of one clear step. `cascade` is its index in the turn
+ * (0 = the swap itself): cleared cropsies are multiplied ×1, ×2 … up to ×5.
+ */
+export function stepScore(res: StepResult, cascade: number): number {
+  const mult = Math.min(5, 1 + cascade);
+  let s = res.cleared.filter((c) => !c.tile.animal).length * SCORE.tile * mult;
+  for (const c of res.created) s += SCORE.made[c.tile.special ?? ''] ?? 0;
+  s += res.blasts.length * SCORE.blast;
+  for (const b of res.blockers) s += SCORE.layer + (b.hp <= 0 ? SCORE.broken : 0);
+  s += res.plowed.length * SCORE.soil;
   return s;
 }

@@ -409,14 +409,14 @@ ${face(50, 48, 44)}`),
 <ellipse cx="40" cy="36" rx="4" ry="8" fill="#fff" opacity=".35"/>
 ${face(50, 46, 42)}`),
   apple: svg(100, 100, `
-<defs><radialGradient id="ta" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ff7b7b"/><stop offset="1" stop-color="#d81f2a"/></radialGradient></defs>
-<path d="M50 26c-10-16-30-14-36 4-6 20 8 52 24 60 6 3 10 0 12 0s6 3 12 0c16-8 30-40 24-60-6-18-26-20-36-4z" fill="url(#ta)"/>
+<defs><radialGradient id="ta" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ffa8d8"/><stop offset=".55" stop-color="#ec3f9c"/><stop offset="1" stop-color="#a3125f"/></radialGradient></defs>
+<path d="M50 26c-10-16-30-14-36 4-6 20 8 52 24 60 6 3 10 0 12 0s6 3 12 0c16-8 30-40 24-60-6-18-26-20-36-4z" fill="url(#ta)" stroke="#7a0c47" stroke-width="3"/>
 <path d="M50 28c0-10 4-16 10-20" stroke="#6b3f17" stroke-width="5" stroke-linecap="round" fill="none"/>
 <path d="M54 16c8-8 20-6 22 2-8 6-18 4-22-2z" fill="#4fb84a"/>
 <ellipse cx="30" cy="40" rx="6" ry="10" fill="#fff" opacity=".35" transform="rotate(-15 30 40)"/>
 ${face(50, 54, 46)}`),
   berry: svg(100, 100, `
-<defs><radialGradient id="tb" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ff6b9a"/><stop offset="1" stop-color="#d9144e"/></radialGradient></defs>
+<defs><radialGradient id="tb" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#ff6a55"/><stop offset=".6" stop-color="#e8261e"/><stop offset="1" stop-color="#b10d14"/></radialGradient></defs>
 <path d="M50 94C26 84 12 60 16 40c4-16 20-18 34-10 14-8 30-6 34 10 4 20-10 44-34 54z" fill="url(#tb)"/>
 <path d="M30 20c10-8 14 0 20 4 6-4 10-12 20-4-4 10-14 12-20 10-6 2-16 0-20-10z" fill="#4fb84a"/>
 <g fill="#ffe57a"><circle cx="30" cy="48" r="2.5"/><circle cx="70" cy="48" r="2.5"/><circle cx="26" cy="62" r="2.5"/><circle cx="74" cy="62" r="2.5"/><circle cx="36" cy="76" r="2.5"/><circle cx="64" cy="76" r="2.5"/><circle cx="50" cy="84" r="2.5"/></g>
@@ -429,6 +429,19 @@ ${face(50, 56, 44)}`),
 <ellipse cx="14" cy="36" rx="12" ry="7" transform="rotate(22 14 36)"/><ellipse cx="14" cy="64" rx="12" ry="7" transform="rotate(-22 14 64)"/><ellipse cx="86" cy="36" rx="12" ry="7" transform="rotate(-22 86 36)"/><ellipse cx="86" cy="64" rx="12" ry="7" transform="rotate(22 86 64)"/></g>
 <circle cx="50" cy="50" r="27" fill="#7a4a1c"/><circle cx="50" cy="50" r="23" fill="#9a6230"/>
 ${face(50, 48, 46, '#3a1f08')}`),
+  eggplant: svg(100, 100, `
+<defs><linearGradient id="tep" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b98cff"/><stop offset=".5" stop-color="#7b3fd0"/><stop offset="1" stop-color="#43157a"/></linearGradient></defs>
+<path d="M44 24c-16 6-28 24-28 44 0 16 12 26 28 26 22 0 40-16 40-38 0-18-12-30-24-34-6-2-11 0-16 2z" fill="url(#tep)"/>
+<path d="M38 26c6-12 22-14 28-4-6 2-8 8-6 12-8-6-16-6-22-8z" fill="#4fb84a"/><path d="M52 14c0-6 4-10 8-10" stroke="#3e9a3c" stroke-width="5" stroke-linecap="round" fill="none"/>
+<ellipse cx="30" cy="56" rx="5" ry="12" fill="#fff" opacity=".35" transform="rotate(20 30 56)"/>
+${face(50, 60, 44, '#2a0b4a')}`),
+  cabbage: svg(100, 100, `
+<defs><radialGradient id="tcb" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#d4fbf6"/><stop offset=".55" stop-color="#5fd6d0"/><stop offset="1" stop-color="#1f8fa8"/></radialGradient></defs>
+<path d="M14 54c-6-16 4-34 16-38 6-10 34-10 40 0 14 4 22 22 16 38-2 22-18 36-36 36S16 76 14 54z" fill="#2a9fb8"/>
+<circle cx="50" cy="54" r="34" fill="url(#tcb)"/>
+<path d="M50 22v64M50 40c-10-4-18-2-24 6M50 40c10-4 18-2 24 6M50 60c-12-4-20 0-26 8M50 60c12-4 20 0 26 8" stroke="#1f8fa8" stroke-width="2.5" fill="none" stroke-linecap="round" opacity=".55"/>
+<path d="M18 46c4-10 12-16 20-18M82 46c-4-10-12-16-20-18" stroke="#fff" stroke-width="3" fill="none" opacity=".45" stroke-linecap="round"/>
+${face(50, 56, 42, '#0b4a55')}`),
   corn: svg(100, 100, `
 <defs><linearGradient id="tco" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe680"/><stop offset="1" stop-color="#f2b01c"/></linearGradient></defs>
 <path d="M50 6c17 0 25 22 25 44s-9 40-25 42c-16-2-25-20-25-42S33 6 50 6z" fill="url(#tco)" stroke="#d99a12" stroke-width="2"/>
@@ -585,7 +598,8 @@ export const ICON_ANY_GOAL = svg(64, 64, `
 <path d="M12 40h40M14 48h36M22 32l2 24M32 32v24M42 32l-2 24" stroke="#8a5a2b" stroke-width="2"/>`);
 
 export const TILE_COLORS: Record<string, string> = {
-  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#e8413c', berry: '#ff4d8a', sunflower: '#ffd23a', corn: '#f7cf3a', blueberry: '#4a6fe0',
+  wheat: '#f3c54a', carrot: '#ff8a3d', apple: '#ec3f9c', berry: '#e8261e', sunflower: '#ffd23a', corn: '#f7cf3a', blueberry: '#4a6fe0',
+  eggplant: '#7b3fd0', cabbage: '#3fc4cc',
 };
 
 export const ITEM_ICON: Record<string, string> = {
