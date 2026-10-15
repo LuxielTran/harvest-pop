@@ -334,7 +334,7 @@ export const MATERIAL_PRICE: Record<string, number> = { nail: 1, screw: 1, bolt:
 export const MATERIALS: string[] = ['nail', 'screw', 'bolt', 'tape'];
 
 /** Cumulative XP needed to reach farm level n (index = level), from the sheet; 58 000 would be level 51. */
-export const XP_THRESHOLDS = [0, 0, 15, 20, 30, 50, 200, 370, 500, 790, 1000, 1240, 1480, 1720, 1960, 2200, 2600, 3000, 3400, 3800, 4200,
+export const XP_THRESHOLDS = [0, 0, 15, 25, 40, 50, 200, 370, 500, 790, 1000, 1240, 1480, 1720, 1960, 2200, 2600, 3000, 3400, 3800, 4200,
   4860, 5520, 6180, 6840, 7500, 8400, 9300, 10200, 11100, 12000, 13400, 14800, 16200, 17600, 19000, 21000, 23000, 25000, 27000, 29000,
   31600, 34200, 36800, 39400, 42000, 45200, 48400, 51600, 54800, 58000];
 export const MAX_LEVEL = 50;

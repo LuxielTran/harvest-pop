@@ -13,7 +13,7 @@ import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
 import { svg } from '../art-core';
 import {
-  ACHIEVEMENTS, ACHIEVEMENTS_UNLOCK, ANIMALS, BOOSTERS, CROPS, CROP_GEM_PRICE, FOOTPRINT, LEVEL_REWARDS, MACHINES, MACHINE_SLOTS_MAX, MATCH_LEVELS,
+  ACHIEVEMENTS, ACHIEVEMENTS_UNLOCK, ANIMALS, BOOSTERS, BOOST_SPEED, CROPS, CROP_GEM_PRICE, FOOTPRINT, LEVEL_REWARDS, MACHINES, MACHINE_SLOTS_MAX, MATCH_LEVELS,
   MATERIALS, MATERIAL_PRICE, MOVE_HOLD_MS, PENS, RECIPES, TREES, TRUCK_UNLOCK, WORLD_SCALE, XP_THRESHOLDS, maxPlots, plotCost, slotPrice,
   unlocksAt, xpForNextLevel, type StorageType, type Unlock,
 } from '../config';
@@ -21,6 +21,8 @@ import { t } from '../i18n';
 import * as St from '../state';
 import { S } from '../state';
 import { tutorial } from '../tutorial';
+import { openBoostOffer } from './boost';
+import { objectHit, preloadObject } from './hitmask';
 import { centerOf, closePopup, currentPopup, el, floatLabel, fmtTime, img, onPopupChange, openPopup, rerenderPopup, setPopupRenderer, stage, toast, toStage } from './common';
 
 export interface FarmHandlers { playLevel(index: number): void; }
@@ -79,6 +81,7 @@ export function buildFarm(): HTMLElement {
       <div class="pill star">${img(A.ICON_STAR)}<span id="hud-star">0</span></div>
       <button class="iconbtn" id="btn-settings">${img(A.ICON_SETTINGS)}</button>
     </div>
+    <button class="boostbtn" id="hud-boost" data-tut="boost" style="display:none">${img(A.ICON_CLOCK)}<b>×${BOOST_SPEED}</b><span></span></button>
     <div class="scene"><div class="world" style="width:${WORLD_W}px;height:${WORLD_H}px"><div class="ground"></div></div></div>
     <div class="bottombar">
       <button class="bbtn" data-tut="shop" id="bb-shop">${img(A.ICON_SHOP)}<span>${t('shop')}</span><b class="badge" id="shop-badge" style="display:none"></b></button>
@@ -94,6 +97,7 @@ export function buildFarm(): HTMLElement {
   root.querySelector('#bb-match')!.addEventListener('click', () => gate('openMatch') && openMatchMap());
   root.querySelector('#bb-upgrades')!.addEventListener('click', () => gate('openUpgrades') && openUpgradeShop());
   root.querySelector('#btn-settings')!.addEventListener('click', () => gate('openSettings') && openSettings());
+  root.querySelector('#hud-boost')!.addEventListener('click', () => { if (St.boostOffered() && gate('openBoost')) openBoostOffer(); });
   // The coin pill opens the studio's coin shop when that module is on; otherwise it is just the counter.
   root.querySelector('#hud-coinbtn')!.addEventListener('click', () => { if (!St.tutorialActive()) FalconSDK.shop.open('header_coin'); });
   root.querySelector('#hud-gembtn')!.addEventListener('click', () => { if (!St.tutorialActive()) FalconSDK.shop.open('header_gem'); });
@@ -101,7 +105,15 @@ export function buildFarm(): HTMLElement {
   // A pan, a long press or a move in progress swallows the click that ends it (✓ / ✕ excepted).
   scene.addEventListener('click', (e) => {
     if ((e.target as Element).closest('.movectl')) return;
-    if (swallowClick || moving) { e.stopPropagation(); e.preventDefault(); }
+    if (swallowClick || moving) { e.stopPropagation(); e.preventDefault(); return; }
+    // A tap on the empty part of a building's box goes to whatever is drawn under it (or nowhere).
+    const boxed = (e.target as Element).closest<HTMLElement>('[data-key]');
+    if (!boxed || !e.isTrusted) return;
+    const real = objectAt(e.clientX, e.clientY);
+    if (real === boxed) return;
+    e.stopPropagation();
+    e.preventDefault();
+    real?.click();
   }, true);
   // A press anywhere outside the tray / time panel closes them (the press itself still goes through).
   root.addEventListener('pointerdown', (e) => {
@@ -218,6 +230,21 @@ function makeObj(key: string): HTMLElement {
   return e;
 }
 
+/** The map object really under a client point: the topmost one whose art (not just its box) is there. */
+function objectAt(x: number, y: number): HTMLElement | null {
+  const off: HTMLElement[] = [];
+  let found: HTMLElement | null = null;
+  for (let i = 0; i < 8; i++) {
+    const e = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-key]') ?? null;
+    if (!e || !world?.contains(e)) break;
+    if (objectHit(e, x, y)) { found = e; break; }
+    e.style.pointerEvents = 'none';
+    off.push(e);
+  }
+  for (const e of off) e.style.pointerEvents = '';
+  return found;
+}
+
 /** Create / remove map elements so they match what the player owns. */
 function syncObjects(): void {
   const want = presentKeys();
@@ -242,6 +269,7 @@ function setObj(key: string, sig: string, html: string, cls = ''): void {
   if (!e || sigs.get(key) === sig) return;
   sigs.set(key, sig);
   e.innerHTML = html;
+  preloadObject(e);
   const keep = ['moving', 'blocked', 'pressing', 'tut-hl', 'pen', 'house', 'tree'].filter((c) => e.classList.contains(c));
   e.className = [e.classList.contains('plot') ? 'plot' : 'obj', cls, ...keep].filter(Boolean).join(' ');
 }
@@ -338,7 +366,9 @@ function worldPoint(clientX: number, clientY: number): { x: number; y: number } 
 
 function onScenePress(ev: PointerEvent): void {
   if (press || ev.button > 0 || (ev.target as Element).closest('.movectl, .visitor, .truck, .orderboard')) return;
-  const hit = (ev.target as Element).closest<HTMLElement>('[data-key]')?.dataset.key ?? null;
+  const boxed = (ev.target as Element).closest<HTMLElement>('[data-key]');
+  // The object being moved is grabbed anywhere on its box; others only on their drawn art.
+  const hit = (boxed && boxed.dataset.key === moving?.key ? boxed : objectAt(ev.clientX, ev.clientY))?.dataset.key ?? null;
   const key = hit && presentKeys().includes(hit) ? hit : null;
   press = { x: ev.clientX, y: ev.clientY, camX: cam.x, camY: cam.y, key, timer: 0, mode: 'wait', dx: 0, dy: 0 };
   if (moving && key === moving.key) startCarry(ev);
@@ -512,6 +542,7 @@ export function updateFarm(): void {
   const badge = root.querySelector<HTMLElement>('#shop-badge')!;
   badge.style.display = fresh ? '' : 'none';
   badge.textContent = String(fresh);
+  syncBoost();
 
   setObj('barn', 'barn', img(A.ICON_BARN, 'bld', 140));
   setObj('silo', 'silo', img(A.ICON_SILO, 'bld', 130));
@@ -567,12 +598,24 @@ function animalHtml(type: string, c: St.AnimalState, i: number, s: { x: number; 
   return `<span class="chick ${c.status}" data-animal="${i}" data-tut="animal${i}" style="left:${s.x}px;top:${s.y}px">${img(animalIcon(type))}${badge}</span>`;
 }
 
+/** The Farm Boost button: from BOOST_UNLOCK while the ads module is on; shows the time left while a boost runs. */
+function syncBoost(): void {
+  const b = root?.querySelector<HTMLElement>('#hud-boost');
+  if (!b) return;
+  b.style.display = St.boostOffered() ? '' : 'none';
+  const left = St.boostLeft();
+  b.classList.toggle('on', left > 0);
+  b.querySelector('span')!.textContent = left > 0 ? fmtTime(left) : t('boost_btn');
+}
+
 /** 0 → just started, 1 → done. */
 const fraction = (readyAt: number, total: number): number => Math.max(0, Math.min(1, 1 - (readyAt - St.now()) / total));
 const growFraction = (p: St.PlotState): number => fraction(p.readyAt, St.cropMs(p.crop!));
 
 function updateTimers(): void {
   const now = St.now();
+  if (tray && 'machine' in tray.origin) renderSlots(tray.origin.machine);
+  syncBoost();
   for (const e of stage().querySelectorAll<HTMLElement>('[data-timer]')) e.textContent = fmtTime(Number(e.dataset.timer) - now);
   info?.update();
   for (const e of world?.querySelectorAll<HTMLElement>('[data-animalbar]') ?? []) {
@@ -707,7 +750,8 @@ function tapVisitor(): void {
     row.querySelector('.green')!.addEventListener('click', () => {
       if (!gate('serveVisitor')) return;
       const coin = v.coin;
-      if (report(St.serveVisitor())) { closePopup(); const c = centerOf(root!.querySelector('.pill.coin')!); floatLabel(c.x, c.y + 10, `${img(A.ICON_COIN)}+${coin}`); }
+      // The visit's XP can open the level-up popup; only the visitor's own popup closes.
+      if (report(St.serveVisitor())) { if (currentPopup() === 'visitor') closePopup(); const c = centerOf(root!.querySelector('.pill.coin')!); floatLabel(c.x, c.y + 10, `${img(A.ICON_COIN)}+${coin}`); }
     });
     p.body.appendChild(row);
   };
@@ -722,7 +766,7 @@ function tapVisitor(): void {
 function tapPlot(i: number): void {
   const p = S.farm.plots[i];
   if (p.status === 'growing') {
-    showInfo(plotEl(i), t(p.crop!), p.readyAt, St.cropMs(p.crop!), true, () => S.farm.plots[i]?.status === 'growing',
+    showInfo(plotEl(i), t(p.crop!), () => S.farm.plots[i]?.readyAt ?? 0, St.cropMs(p.crop!), true, () => S.farm.plots[i]?.status === 'growing',
       { cost: () => St.plotSkipCost(i), run: () => St.skipPlot(i) });
     return;
   }
@@ -772,7 +816,7 @@ function tapMachine(i: number): void {
 function tapTree(i: number): void {
   const tr = S.farm.trees[i];
   if (!St.treeReady(i)) {
-    showInfo(objEl(`tree${i}`)!, t(tr.type), tr.readyAt, St.treeMs(tr.type), false, () => !St.treeReady(i), { cost: () => St.treeSkipCost(i), run: () => St.skipTree(i) });
+    showInfo(objEl(`tree${i}`)!, t(tr.type), () => S.farm.trees[i]?.readyAt ?? 0, St.treeMs(tr.type), false, () => !St.treeReady(i), { cost: () => St.treeSkipCost(i), run: () => St.skipTree(i) });
     return;
   }
   if (!gate('harvestTree')) return;
@@ -808,7 +852,12 @@ function renderSlots(i: number): void {
   for (let k = m.queue.length; k < m.slots; k++) html += '<div class="slot empty"></div>';
   if (m.slots < MACHINE_SLOTS_MAX) html += `<button class="slot buyslot" data-tut="slot:buy"><span>+</span><b class="price">${img(A.ICON_COIN)}${slotPrice(m.slots)}</b></button>`;
   const sig = `${html.replace(/data-timer="\d+">[^<]*/g, '')}`;
-  if (row.dataset.sig === sig) return;
+  if (row.dataset.sig === sig) {
+    // Same slots; the running batch's end may still have moved (farm boost).
+    const timer = row.querySelector<HTMLElement>('[data-timer]');
+    if (timer && running) timer.dataset.timer = String(running.readyAt);
+    return;
+  }
   row.dataset.sig = sig;
   row.innerHTML = html;
 }
@@ -921,13 +970,15 @@ function refreshCounts(): void {
 }
 
 /** Time left on a growing field / tree or a working machine (only shown when tapped). */
-function showInfo(anchor: HTMLElement, title: string, readyAt: number, total: number, aroundFields: boolean, alive: () => boolean,
+// `readyAt` is read live: the farm boost pulls timers closer while the panel is open.
+function showInfo(anchor: HTMLElement, title: string, readyAt: () => number, total: number, aroundFields: boolean, alive: () => boolean,
   skip?: { cost: () => number; run: () => string }): void {
   closeTray();
   closeInfo();
-  const e = el(`<div class="plotinfo"><b>${title}</b><div class="bar"><i style="width:${fraction(readyAt, total) * 100}%"></i></div>
-    <span>${t('time_left')} <b data-timer="${readyAt}">${fmtTime(readyAt - St.now())}</b></span>${skip ? gemBtn(skip.cost(), 'data-skip', 'wide', t('finish_now')) : ''}</div>`);
+  const e = el(`<div class="plotinfo"><b>${title}</b><div class="bar"><i style="width:${fraction(readyAt(), total) * 100}%"></i></div>
+    <span>${t('time_left')} <b data-timer="${readyAt()}">${fmtTime(readyAt() - St.now())}</b></span>${skip ? gemBtn(skip.cost(), 'data-skip', 'wide', t('finish_now')) : ''}</div>`);
   const bar = e.querySelector<HTMLElement>('.bar i')!;
+  const left = e.querySelector<HTMLElement>('[data-timer]')!;
   const cost = e.querySelector<HTMLElement>('[data-skip] b');
   e.querySelector('[data-skip]')?.addEventListener('click', () => {
     if (!skip || !gemReport(skip.run())) return;
@@ -937,7 +988,12 @@ function showInfo(anchor: HTMLElement, title: string, readyAt: number, total: nu
   info = {
     el: e,
     timer: window.setTimeout(closeInfo, skip ? 5000 : 3000),
-    update: () => { bar.style.width = `${fraction(readyAt, total) * 100}%`; if (cost && skip) cost.textContent = String(skip.cost()); },
+    update: () => {
+      left.dataset.timer = String(readyAt());
+      left.textContent = fmtTime(readyAt() - St.now());
+      bar.style.width = `${fraction(readyAt(), total) * 100}%`;
+      if (cost && skip) cost.textContent = String(skip.cost());
+    },
     alive,
   };
   placePanel(e, anchor, 30, aroundFields);
@@ -1270,7 +1326,7 @@ export function openShop(): void {
       const maxF = maxPlots(lvl);
       const nextF = fields >= maxF ? [3, 5, 7, 9].map((d) => lvl + d).find((l) => maxPlots(l) > maxF) ?? 0 : 0;
       addRow(A.PLOT_SOIL, t('plot'), fields >= maxF ? (nextF ? t('next_at', { n: lvl + 1 + ((lvl + 1) % 2) }) : t('maxed')) : `${fields}/${maxF}`, plotCost(fields), 'plot', fields < maxF,
-        () => { if (gate('buy', 'plot')) buyAndPlace(`plot${fields}`, undefined, plotCost(fields), () => St.buyPlot()); });
+        () => { if (gate('buy', 'plot')) buyAndPlace(`plot${fields}`, undefined, plotCost(fields), () => St.buyPlot()); }, `plot:${maxF}`);
       for (const tr of Object.values(TREES).sort((a, b) => a.unlockLevel - b.unlockLevel)) {
         const open = tr.unlockLevel <= lvl;
         if (!open && !tease(tr.unlockLevel)) continue;

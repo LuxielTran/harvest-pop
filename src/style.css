@@ -313,7 +313,8 @@ img { pointer-events: none; display: block; }
 .gbox img { width: 40px; height: 40px; }
 .gbox small { font-size: 11px; opacity: .8; display: block; font-weight: 700; }
 .gbox.done { background: #3b8f2e; }
-#board { position: absolute; left: 0; top: 0; }
+/* touch-action: none, or a phone's browser takes the swipe for a scroll and cancels it. */
+#board { position: absolute; left: 0; top: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
 .mfoot { position: absolute; left: 0; right: 0; bottom: 0; height: 176px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 10px; padding-bottom: 12px; z-index: 5; }
 .starrow { display: flex; justify-content: center; gap: 8px; }
 .starrow img { width: 54px; height: 54px; filter: grayscale(1) brightness(.6); transform: scale(.85); }
@@ -459,3 +460,39 @@ img { pointer-events: none; display: block; }
 .sbar .mk img { width: 100%; height: 100%; filter: grayscale(1) brightness(.75); }
 .sbar .mk.on img { filter: drop-shadow(0 0 5px #ffe16b); animation: starpop .45s ease-out; }
 @keyframes starpop { 0% { transform: scale(.4); } 60% { transform: scale(1.45); } 100% { transform: scale(1); } }
+
+/* ---------- Farm Boost (rewarded ad) ---------- */
+/* A square button above Shop (the Shop button's centre is ~68px from the left). */
+.boostbtn {
+  position: absolute; left: 34px; bottom: 108px; z-index: 5; width: 68px; height: 68px; padding: 4px 0 0; border: 0; border-radius: 16px;
+  background: linear-gradient(#ffc46b, #ff8a1e); box-shadow: 0 4px 0 #b85a00, 0 6px 8px rgba(0,0,0,.2); color: #fff; font-weight: 900;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-shadow: 0 1px 0 rgba(0,0,0,.35);
+  animation: boostpulse 1.6s infinite ease-in-out;
+}
+.boostbtn img { width: 34px; height: 34px; }
+.boostbtn b { position: absolute; right: -6px; top: -8px; background: var(--red); border-radius: 11px; padding: 1px 6px; font-size: 14px; box-shadow: 0 2px 0 rgba(0,0,0,.25); }
+.boostbtn span { font-size: 12px; line-height: 20px; white-space: nowrap; }
+.boostbtn.on { background: linear-gradient(#8fe07f, #45b534); box-shadow: 0 4px 0 #2f7f22, 0 6px 8px rgba(0,0,0,.2); animation: none; }
+.boostbtn:active { transform: translateY(3px); box-shadow: 0 1px 0 #b85a00; }
+@keyframes boostpulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+.card.boost .boost-art { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.card.boost .boost-art img { width: 72px; height: 72px; }
+.card.boost .boost-art b { font-size: 44px; font-weight: 900; color: #ff8a1e; text-shadow: 0 3px 0 #b85a00; }
+.card.boost .center { text-align: center; font-weight: 700; }
+.card.boost .boost-left b { color: #2f7f22; }
+
+.simad { position: absolute; inset: 0; z-index: 50; background: linear-gradient(160deg, #2b5f9e, #173459); display: flex; flex-direction: column; color: #fff; }
+.simad-top { display: flex; align-items: center; gap: 8px; padding: 14px 12px; }
+.simad-tag { background: #ffd23f; color: #3a2a00; font-weight: 900; font-size: 13px; padding: 3px 8px; border-radius: 6px; }
+.simad-reward { flex: 1; font-weight: 900; font-size: 15px; }
+.simad-x { width: 36px; height: 36px; border: 0; border-radius: 50%; background: rgba(255,255,255,.18); color: #fff; font-size: 18px; font-weight: 900; opacity: .45; }
+.simad.done .simad-x { opacity: 1; background: var(--red); box-shadow: 0 3px 0 #a52a2a; }
+.simad.done .simad-reward { color: #8dff7a; }
+.simad-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+.simad-body img { width: 160px; height: auto; animation: boostpulse 1.2s infinite ease-in-out; }
+.simad-body b { font-size: 34px; font-weight: 900; text-shadow: 0 3px 0 rgba(0,0,0,.35); }
+.simad-body span { font-size: 16px; opacity: .8; }
+.simad-bar { height: 6px; background: rgba(255,255,255,.2); }
+.simad-bar i { display: block; height: 100%; width: 0; background: #ffd23f; }
+/* Highlighted by the tutorial: above the map, but under the pointing hand (z 60). */
+.boostbtn.tut-hl { z-index: 55 !important; }

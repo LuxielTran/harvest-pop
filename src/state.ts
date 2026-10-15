@@ -8,7 +8,7 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import {
-  ACHIEVEMENTS, ACHIEVEMENTS_UNLOCK, ANIMALS, BOOSTERS, CROPS, CROP_GEM_PRICE, DEFAULT_LAYOUT, GEM_START, ITEMS, LEVEL_GIFTS, LEVEL_REWARDS, MACHINES,
+  ACHIEVEMENTS, ACHIEVEMENTS_UNLOCK, ANIMALS, BOOST_SECONDS, BOOST_SPEED, BOOST_UNLOCK, BOOSTERS, CROPS, CROP_GEM_PRICE, DEFAULT_LAYOUT, GEM_START, ITEMS, LEVEL_GIFTS, LEVEL_REWARDS, MACHINES,
   MACHINE_SLOTS_MAX, MATCH_LEVELS, MATERIAL_PRICE, ORDER_BONUS, ORDER_EXP_BONUS, PENS, PLOTS_MAX, PLOTS_START, RECIPES, REPLAY_COINS, REVIVE_PRICE,
   STORAGE_START, STORAGE_UPGRADES, TREES, TRUCK_UNLOCK, TUTORIAL_SECONDS, TUTORIAL_START, VISITOR_BONUS, VISITOR_EXP, VISITOR_INTERVAL_SEC, VISITOR_UNLOCK,
   XP_THRESHOLDS, farmLevelForXp, gemsFor, itemUnlockLevel, maxPlots, orderResetSec, orderShape, orderSlots, plotCost, slotPrice, winCoins,
@@ -68,6 +68,8 @@ export interface SaveData {
   /** Shop offers the player has looked at (offer key → 1); unseen unlocked ones carry a "new" badge. */
   shopSeen: Record<string, number>;
   settings: { sound: number; music: number; haptic: number };
+  /** The rewarded-ad farm boost: on until `until`; farm timers have been sped up through `at`. */
+  boost: { until: number; at: number };
   lastSeen: number;
 }
 
@@ -127,6 +129,7 @@ function freshSave(): SaveData {
     achievements: {},
     shopSeen: {},
     settings: { sound: 1, music: 1, haptic: 1 },
+    boost: { until: 0, at: 0 },
     lastSeen: now(),
   };
 }
@@ -229,6 +232,8 @@ export function loadFromSave(raw: Record<string, any>): void {
   f.shopSeen = numMap(hp.shopSeen);
   const set = obj(hp.settings);
   f.settings = { sound: num(set.sound, 1), music: num(set.music, 1), haptic: num(set.haptic, 1) };
+  const boost = obj(hp.boost);
+  f.boost = { until: num(boost.until, 0), at: num(boost.at, 0) };
   f.lastSeen = num(hp.lastSeen, now());
   S = f;
   guardClock();
@@ -245,6 +250,7 @@ function guardClock(): void {
     for (const tr of S.farm.trees) if (tr.readyAt) tr.readyAt += shift;
     if (S.farm.nextVisitorAt) S.farm.nextVisitorAt += shift;
     for (const c of S.farm.orderCooldowns) c.at += shift;
+    if (S.boost.until) { S.boost.until += shift; S.boost.at += shift; }
   }
   S.lastSeen = t;
 }
@@ -347,9 +353,47 @@ export const cropMs = (crop: string): number => secondsFor(CROPS[crop].growSecon
 export const recipeMs = (rid: string): number => secondsFor(RECIPES[rid].seconds) * 1000;
 export const treeMs = (type: string): number => secondsFor(TREES[type].seconds) * 1000;
 
+// ---------------------------------------------------------------------------
+// Farm boost (rewarded ad): every farm timer runs ×BOOST_SPEED while it lasts.
+
+/** The Boost button shows from BOOST_UNLOCK while the ads module is on; in a lesson, only in the steps that teach it. */
+export const boostOffered = (): boolean =>
+  FalconSDK.ads.enabled && farmLevel() >= BOOST_UNLOCK && (!tutorialActive() || S.tutorial.stepId.startsWith('L3:BOOST'));
+export const boostLeft = (): number => Math.max(0, S.boost.until - now());
+
+/** Start the boost after a watched ad; a boost still running is extended. */
+export function startBoost(): void {
+  catchUpBoost();
+  const t = now();
+  S.boost = { until: Math.max(t, S.boost.until) + BOOST_SECONDS * 1000, at: t };
+  save();
+}
+
+/**
+ * Credit the boosted time since the last call: pulling every running timer
+ * (BOOST_SPEED − 1) × that span closer makes it run BOOST_SPEED× fast. A
+ * machine queue moves as a whole, so its batches stay back to back. Time spent
+ * away from the game inside the boost window counts too.
+ */
+function catchUpBoost(): void {
+  const t = now();
+  const end = Math.min(t, S.boost.until);
+  const span = end - S.boost.at;
+  if (span <= 0) return;
+  S.boost.at = end;
+  const pull = span * (BOOST_SPEED - 1);
+  // A timer pulled past `end` just finishes at `end`, never in the past.
+  const sooner = (readyAt: number): number => Math.max(end, readyAt - pull);
+  for (const p of S.farm.plots) if (p.status === 'growing' && p.readyAt > end) p.readyAt = sooner(p.readyAt);
+  for (const pen of S.farm.pens) for (const c of pen.animals) if (c.status === 'feeding' && c.readyAt > end) c.readyAt = sooner(c.readyAt);
+  for (const m of S.farm.machines) for (const j of m.queue) if (j.readyAt > end) j.readyAt = sooner(j.readyAt);
+  for (const tr of S.farm.trees) if (tr.readyAt > end) tr.readyAt = sooner(tr.readyAt);
+}
+
 /** Advance every timer to `now()`: growing → ready, feeding → ready (a pet wakes up hungry), a batch or a tree finishing, a visitor arriving. */
 let lastTick = 0;
 export function tick(): boolean {
+  catchUpBoost();
   const t = now();
   let changed = false;
   for (const p of S.farm.plots) if (p.status === 'growing' && t >= p.readyAt) { p.status = 'ready'; changed = true; }
@@ -780,6 +824,9 @@ export function shopOffers(): { key: string; tab: ShopTab }[] {
   }
   for (const m of Object.values(MACHINES)) for (let k = 1; k <= allowedCount(m.unlockLevels, lvl); k++) out.push({ key: `mach:${m.id}:${k}`, tab: 'build' });
   for (const tr of Object.values(TREES)) if (tr.unlockLevel <= lvl) out.push({ key: `tree:${tr.id}`, tab: 'nature' });
+  // New fields the level opened (keyed by the new maximum), while some are still unbought.
+  const fields = maxPlots(lvl);
+  if (fields > PLOTS_START && S.farm.plots.length < fields) out.push({ key: `plot:${fields}`, tab: 'nature' });
   return out;
 }
 export const offerSeen = (key: string): boolean => S.shopSeen[key] === 1;

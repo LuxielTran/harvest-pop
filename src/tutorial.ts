@@ -10,13 +10,13 @@
 //      → harvest the rest → Shop: coop (place ✓) → 3 chickens (✕) → feed them with the
 //      gifted feed → collect the eggs. Ends on farm level 2.
 //   L2 (level 2): Shop: feed mill (place ✓) → make feed → a visitor (tap, deliver).
-//   L3 (level 3): Shop: bakery → bake bread → collect.
+//   L3 (level 3): Shop: bakery → bake bread → collect → the Boost ×2 button (opens its ad offer; watch or ✕).
 //   L4 (level 4): the truck: open Orders → deliver → ✕.
 //   L6 (level 6): the farmhouse: open achievements → claim → ✕.
 
-import { LEVEL_LESSONS, TUTORIAL_CHICKENS } from './config';
+import { BOOST_SECONDS, BOOST_SPEED, LEVEL_LESSONS, TUTORIAL_CHICKENS } from './config';
 import {
-  S, anyClaimable, count, farmLevel, free, isTutorialStep, lessonDone, machineJobs, machinesOf, markLessonDone, onChange, pensOf, refillOrders,
+  S, anyClaimable, boostOffered, count, farmLevel, free, isTutorialStep, lessonDone, machineJobs, machinesOf, markLessonDone, onChange, pensOf, refillOrders,
   setTutorialStep, spawnVisitor, stat, tutorialActive, tutorialEnsure, tutorialGrantLevel, tutorialGrantSeeds, grantTutorialBonusStars,
 } from './state';
 import { t } from './i18n';
@@ -105,10 +105,21 @@ const machineSteps = (prefix: string, type: string, rid: string, texts: { tap: s
   }],
 ];
 
+/**
+ * The sowing lesson needs one wheat per empty field. The starter seeds are a
+ * one-off gift, so a save that lands here again without them (a lesson restarted
+ * after a tutorial change, seeds used up on an older step) is topped up instead
+ * of being stuck with no way to sow.
+ */
+const ensureSeeds = (): void => {
+  tutorialGrantSeeds();
+  tutorialEnsure('wheat', S.farm.plots.filter((p) => p.status === 'empty').length);
+};
+
 const L1: [string, StepDef][] = [
-  ['PAN', { allows: [], targets: () => [], text: () => t('tut_pan'), done: () => panned, onEnter: () => tutorialGrantSeeds() }],
-  ['SOW_TAP', { allows: ['openPlot'], targets: () => plotKey('empty'), text: () => t('tut_sow_tap'), done: () => trayIs('plot') || !S.farm.plots.some((p) => p.status === 'empty'), top: true }],
-  ['SOW_DRAG', sweep('seed:wheat', 'empty', 'tut_sow_tap', 'tut_sow_drag', ['openPlot', 'plant'], () => count('wheat') === 0 && !S.farm.plots.some((p) => p.status === 'empty'))],
+  ['PAN', { allows: [], targets: () => [], text: () => t('tut_pan'), done: () => panned, onEnter: ensureSeeds }],
+  ['SOW_TAP', { allows: ['openPlot'], targets: () => plotKey('empty'), text: () => t('tut_sow_tap'), done: () => trayIs('plot') || !S.farm.plots.some((p) => p.status === 'empty'), top: true, onEnter: ensureSeeds }],
+  ['SOW_DRAG', { ...sweep('seed:wheat', 'empty', 'tut_sow_tap', 'tut_sow_drag', ['openPlot', 'plant'], () => count('wheat') === 0 && !S.farm.plots.some((p) => p.status === 'empty')), onEnter: ensureSeeds }],
   ['GROW_WAIT', { allows: [], targets: () => [], text: () => t('tut_grow_wait'), done: () => S.farm.plots.some((p) => p.status === 'ready') }],
   ['REAP_TAP', { allows: ['openPlot'], targets: () => plotKey('ready'), text: () => t('tut_reap_tap'), done: () => trayIs('plot') || siloBlocked(), top: true }],
   ['REAP_DRAG', sweep('sickle', 'ready', 'tut_reap_tap', 'tut_reap_drag', ['openPlot', 'harvest'], () => siloBlocked() || siloUpgraded())],
@@ -158,6 +169,12 @@ const L3: [string, StepDef][] = [
   ['BAK_SHOP', { allows: ['openShop'], targets: () => ['shop'], text: () => t('tut_bakery_shop'), done: () => popup('shop') || machinesOf('bakery') > 0, onEnter: () => tutorialEnsure('wheat', 3) }],
   ['BAK_BUY', buyBuilding('bakery', 'tut_bakery_shop', 'tut_bakery_buy', ['buy:bakery'], () => machinesOf('bakery') > 0)],
   ...machineSteps('BAK', 'bakery', 'bread', { tap: 'tut_bakery_tap', drag: 'tut_bakery_drag', wait: 'tut_bakery_wait', collect: 'tut_bakery_collect' }),
+  // The rewarded-ad Farm Boost. Skipped when the ads module is off (the button is hidden then).
+  ['BOOST_TAP', { allows: ['openBoost'], targets: () => ['boost'], text: () => t('tut_boost_tap', { n: BOOST_SPEED }), done: () => popup('boost') || !boostOffered(), top: true }],
+  ['BOOST_INFO', {
+    allows: ['openBoost', 'watchBoost'], targets: () => (popup('boost') ? ['boost:watch'] : []),
+    text: () => t('tut_boost_info', { n: BOOST_SPEED, m: BOOST_SECONDS / 60 }), done: () => !popup('boost'), top: true,
+  }],
 ];
 
 const L4: [string, StepDef][] = [

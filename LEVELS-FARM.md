@@ -10,8 +10,8 @@ Generated from `src/farm-data.ts` (run the generator in the scratchpad after edi
 |---|---|---|---|---|
 | 1 | 0 |  |  | wheat (×6), coop, chicken, egg, feed #3 |
 | 2 | 15 | 1 gem + 100 coins | L2 | **visitor**, corn (×4), feedmill, feed |
-| 3 | 20 |  | L3 | +3 fields, bakery, bread |
-| 4 | 30 | 1 gem + 100 coins | L4 | **truck** |
+| 3 | 25 |  | L3 | +3 fields, bakery, bread |
+| 4 | 40 | 1 gem + 100 coins | L4 | **truck** |
 | 5 | 50 |  |  | +3 fields, soybean (×3) |
 | 6 | 200 | 1 gem + 100 coins | L6 | **achievements**, cowpasture, cow, dairy, cowfeed #5, cream, milk |
 | 7 | 370 |  |  | +3 fields |

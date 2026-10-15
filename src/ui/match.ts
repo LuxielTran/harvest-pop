@@ -6,7 +6,7 @@
 
 import FalconSDK from '@falcongames/game-client-sdk';
 import * as A from '../art';
-import { BOOSTERS, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, SCORE, STAR_SCORES, starsForScore, type BoosterConfig, type MatchLevelConfig, type TutorialKey } from '../config';
+import { BOOSTERS, BOOSTER_GIFT, EXTRA_MOVES, MATCH_LEVELS, REVIVE_MOVES, REVIVE_PRICE, SCORE, STAR_SCORES, starsForScore, type BoosterConfig, type MatchLevelConfig, type TutorialKey } from '../config';
 import { t } from '../i18n';
 import {
   Board, goalFor, goalsDone, goalsProgress, makeGoals, scoreTurn, stepScore, type Special,
@@ -404,7 +404,7 @@ function showNextTip(): void {
   if (!key || !root) return;
   cardOpen = true;
   hint = null;
-  const free = BOOSTER_TIPS.includes(key) ? `<div class="tc-free">${t('tut_free')}</div>` : '';
+  const free = BOOSTER_TIPS.includes(key) ? `<div class="tc-free">${t('tut_free', { n: BOOSTER_GIFT })}</div>` : '';
   const card = el(`<div class="tcard-wrap"><div class="tcard"><div class="tc-head">${t(`tut_${key}_title`)}</div>
     <div class="tc-illus">${illustration(key)}</div><p>${t(`tut_${key}_text`)}</p>${free}
     <button class="btn green">${t('got_it')}</button></div></div>`);
@@ -537,6 +537,13 @@ function bestTarget(key: string): Pos | null {
   return best;
 }
 
+/** The booster tutorial is over (the free unit used): the player gets BOOSTER_GIFT to keep. */
+function giftBooster(key: string): void {
+  St.grantBooster(key, BOOSTER_GIFT);
+  toast(t('booster_gift', { n: BOOSTER_GIFT, name: t(`booster_${key}`) }));
+  renderBoosterBar();
+}
+
 function setArmed(a: { key: string; external: boolean } | null): void {
   armed = a;
   if (a) { hint = null; selected = null; drag = null; }
@@ -570,9 +577,11 @@ export function addMovesBooster(external = false): boolean {
   if (!board || over || locked || paused) return false;
   if (!external && !St.useBooster('moves')) return false;
   moves += EXTRA_MOVES;
-  if (guide?.key === 'moves') guide = null;
+  const taught = guide?.key === 'moves';
+  if (taught) guide = null;
   if (FalconSDK.analytics.turn.isActive()) FalconSDK.analytics.turn.useBooster('moves');
   toast(t('moves_added', { n: EXTRA_MOVES }));
+  if (taught) setTimeout(() => giftBooster('moves'), 1200);
   updateHud();
   renderBoosterBar();
   return true;
@@ -631,7 +640,11 @@ async function useArmedAt(pos: Pos): Promise<void> {
   if (board !== b) return;
   shakeT = 0.15;
   await runResolve({ hits });
-  if (guide && guide.target !== undefined) { guide = null; renderBoosterBar(); }
+  if (guide && guide.target !== undefined) {
+    if (guide.key === a.key) giftBooster(a.key);
+    guide = null;
+    renderBoosterBar();
+  }
   afterTurn();
 }
 
@@ -648,6 +661,8 @@ function onDown(e: PointerEvent): void {
   if (armed) { void useArmedAt(pos); return; }
   if (!board.at(pos.r, pos.c)) return;
   drag = { pos, x: p.x, y: p.y };
+  // Keep receiving the move when the finger leaves the cell (or the canvas) mid-swipe.
+  try { canvas?.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone */ }
   idleSince = performance.now();
   hint = null;
 }
@@ -864,9 +879,12 @@ async function harvestRush(): Promise<void> {
   toast(t('harvest_rush'));
   const left = moves;
   const step = Math.max(40, Math.min(110, 1400 / left));
+  // Each move left is worth moveLeftGrowth× the one before it, so a big finish fills the star bar fast.
+  let points = SCORE.moveLeft;
   for (let k = 0; k < left && board === b; k++) {
     moves--;
-    addScore(SCORE.moveLeft);
+    addScore(Math.round(points));
+    points *= SCORE.moveLeftGrowth;
     const r = Math.floor(Math.random() * b.rows), c = Math.floor(Math.random() * b.cols);
     if (b.mask[r][c]) fxs.push({ kind: 'sparkle', x: cx(c), y: cy(r), t: 0, dur: 420 });
     hudSig = '';

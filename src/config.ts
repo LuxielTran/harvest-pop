@@ -215,8 +215,24 @@ function diversify(id: number, colors: TileKind[], goals: GoalDef[]): TileKind[]
   return out;
 }
 
+/**
+ * Extra moves on top of each level's hand-tuned count: levels 1–20 and 21–40
+ * get a bonus by difficulty tier. "Easy" covers tutorial, super easy, easy and
+ * normal; "superhard" covers super hard and boss. Levels 41+ keep their count.
+ */
+const MOVE_BONUS: { upTo: number; easy: number; hard: number; superhard: number }[] = [
+  { upTo: 20, easy: 20, hard: 10, superhard: 5 },
+  { upTo: 40, easy: 15, hard: 7, superhard: 3 },
+];
+function moveBonus(id: number, difficulty: Difficulty): number {
+  const tier = MOVE_BONUS.find((b) => id <= b.upTo);
+  if (!tier) return 0;
+  return difficulty === 'hard' ? tier.hard : difficulty === 'superhard' || difficulty === 'boss' ? tier.superhard : tier.easy;
+}
+
 export const MATCH_LEVELS: MatchLevelConfig[] = DEFS.map((d, i) => ({
   ...d,
+  moves: d.moves + moveBonus(i + 1, d.difficulty),
   colors: diversify(i + 1, d.colors, d.goals),
   id: i + 1,
   seed: d.seed ?? 1000 + (i + 1) * 7919,
@@ -243,6 +259,8 @@ export const SCORE = {
   animal: 500,
   /** Harvest Rush: each move left when the level is won. */
   moveLeft: 150,
+  /** …and each next move left is worth this much more than the one before. */
+  moveLeftGrowth: 1.2,
 };
 
 /**
@@ -358,4 +376,13 @@ export const BOOSTERS: BoosterConfig[] = [
   { key: 'witch', price: 300, qty: 1, unlock: 10, use: 'target' },
 ];
 export const EXTRA_MOVES = 5;
+/** Units of a booster given after its tutorial (where the first one is used for free). */
+export const BOOSTER_GIFT = 3;
 
+
+/** Rewarded-ad farm boost: from this farm level the HUD offers an ad that runs every farm timer (fields, animals, machines, trees) ×BOOST_SPEED for BOOST_SECONDS. */
+export const BOOST_UNLOCK = 3;
+export const BOOST_SPEED = 2;
+export const BOOST_SECONDS = 300;
+/** How long the simulated ad plays when no shell app is there to show a real one (plain browser, Preview). */
+export const SIM_AD_SECONDS = 5;
